@@ -246,8 +246,7 @@ func main() {
 	// --sanitize-pii and --sanitize stack independently (D-07).
 	if *sanitizePII {
 		redacted, findings := tldt.SanitizePII(text)
-		count := len(findings)
-		fmt.Fprintf(os.Stderr, "pii-detect: %d redaction(s) applied\n", count)
+		fmt.Fprintf(os.Stderr, "pii-detect: %d redaction(s) applied\n", len(findings))
 		text = redacted
 	}
 
@@ -516,12 +515,12 @@ func validateInput(data []byte) (string, bool, error) {
 	return text, false, nil
 }
 
-// applySentenceCap limits text to at most cap sentences to prevent O(n^2) hang.
-// Returns text unchanged if sentence count is within cap.
-func applySentenceCap(text string, cap int) string {
+// applySentenceCap limits text to at most maxSentences to prevent O(n^2) hang.
+// Returns text unchanged if sentence count is within the cap.
+func applySentenceCap(text string, maxSentences int) string {
 	sents := tldt.TokenizeSentences(text)
-	if len(sents) <= cap {
+	if len(sents) <= maxSentences {
 		return text
 	}
-	return strings.Join(sents[:cap], " ")
+	return strings.Join(sents[:maxSentences], " ")
 }

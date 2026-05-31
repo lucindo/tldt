@@ -41,10 +41,9 @@ type Finding struct {
 
 // Report aggregates all findings from a full analysis pass.
 type Report struct {
-	Findings        []Finding
-	MaxScore        float64
-	Suspicious      bool  // MaxScore > DefaultDetectionThreshold
-	QuarantinedIdxs []int // sentence indices excluded by DetectOutliers with quarantine=true
+	Findings   []Finding
+	MaxScore   float64
+	Suspicious bool // MaxScore > DefaultDetectionThreshold
 }
 
 // DefaultDetectionThreshold is the score above which a report is marked Suspicious.
@@ -236,10 +235,7 @@ func DetectEncoding(text string) []Finding {
 	for _, loc := range base64RE.FindAllStringIndex(text, -1) {
 		candidate := text[loc[0]:loc[1]]
 		// Base64 strings have length divisible by 4 (with padding) and high entropy
-		padded := candidate
-		for len(padded)%4 != 0 {
-			padded += "="
-		}
+		padded := candidate + strings.Repeat("=", (4-len(candidate)%4)%4)
 		_, err := base64.StdEncoding.DecodeString(padded)
 		entropy := shannonEntropy(candidate)
 		if err == nil && entropy > 4.5 {

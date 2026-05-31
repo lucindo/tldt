@@ -42,7 +42,6 @@ func wordOverlapSim(s1, s2 []string) float64 {
 
 // trRowNormalize normalizes each row of matrix to sum to 1.0.
 // Zero rows are replaced with a uniform distribution (1/n).
-// Uses a distinct name to avoid conflicts if LexRank runs in parallel.
 func trRowNormalize(matrix [][]float64) {
 	n := len(matrix)
 	for i := range matrix {
@@ -98,7 +97,6 @@ func powerIterateDamped(matrix [][]float64, damping, epsilon float64, maxIter in
 }
 
 // trSelectTopN selects the top-n sentences by score and returns them in document order.
-// Uses a distinct name to avoid conflicts if LexRank runs in parallel.
 func trSelectTopN(scores []float64, n int, sentences []string) []string {
 	indices := make([]int, len(sentences))
 	for i := range indices {
