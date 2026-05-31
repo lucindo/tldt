@@ -635,6 +635,65 @@ func TestDetectPII_CreditCard(t *testing.T) {
 	}
 }
 
+func TestDetectPII_ModernSecrets(t *testing.T) {
+	positive := []struct {
+		input   string
+		pattern string
+	}{
+		{"key: sk-proj-abc_def-1234567890ABCDEFghij", "api-key"},
+		{"token ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github-token"},
+		{"github_pat_11ABCDE0abcdefghij_klmnopqrstuvwxyz0123456789ABCDEFGH", "github-token"},
+		{"SSN: 123-45-6789", "ssn"},
+	}
+	for _, tc := range positive {
+		found := false
+		for _, f := range DetectPII(tc.input) {
+			if f.Pattern == tc.pattern {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("DetectPII(%q): want %s finding, got none", tc.input, tc.pattern)
+		}
+	}
+}
+
+func TestDetectPII_PrivateKeyBlock(t *testing.T) {
+	pem := "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAabcdefSAMPLEFAKEKEYBODY\n-----END RSA PRIVATE KEY-----"
+	text := "config:\n" + pem + "\ndone"
+	redacted, findings := SanitizePII(text)
+	found := false
+	for _, f := range findings {
+		if f.Pattern == "private-key" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("DetectPII: want private-key finding for PEM block, got %v", findings)
+	}
+	// The multi-line key body must be redacted, not just the header.
+	if strings.Contains(redacted, "SAMPLEFAKEKEYBODY") {
+		t.Errorf("SanitizePII: PEM key body still present in output: %q", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED:private-key]") {
+		t.Errorf("SanitizePII: expected [REDACTED:private-key], got: %q", redacted)
+	}
+}
+
+func TestDetectPII_CreditCardLuhn(t *testing.T) {
+	// Luhn-invalid 16-digit run must not be flagged or redacted.
+	bad := "id 4111111111111112 here"
+	for _, f := range DetectPII(bad) {
+		if f.Pattern == "credit-card" {
+			t.Errorf("DetectPII(%q): unexpected credit-card finding for Luhn-invalid number", bad)
+		}
+	}
+	redacted, _ := SanitizePII(bad)
+	if !strings.Contains(redacted, "4111111111111112") {
+		t.Errorf("SanitizePII: Luhn-invalid number should remain, got: %q", redacted)
+	}
+}
+
 func TestSanitizePII_Redaction(t *testing.T) {
 	input := "Contact alice@example.com for help"
 	redacted, findings := SanitizePII(input)

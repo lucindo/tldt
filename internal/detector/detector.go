@@ -379,9 +379,14 @@ func DetectOutliers(sentences []string, simMatrix [][]float64, threshold float64
 const CategoryPII Category = "pii"
 
 // piiDef pairs a human-readable name with a compiled regex for PII pattern matching.
+// validate, when set, filters matches: a match is kept only if validate returns true
+// (used to apply a Luhn checksum to credit-card candidates). multiline patterns are
+// scanned against the full text rather than line-by-line, for secrets that span lines.
 type piiDef struct {
-	name string
-	re   *regexp.Regexp
+	name      string
+	re        *regexp.Regexp
+	validate  func(string) bool
+	multiline bool
 }
 
 // piiPatterns is the canonical set of PII and secret patterns.
@@ -393,8 +398,9 @@ var piiPatterns = []piiDef{
 		re:   regexp.MustCompile(`Bearer\s+[A-Za-z0-9._~+/\-]+=*`),
 	},
 	{
+		// Allow _ and - so modern OpenAI keys (sk-proj-…) match, not just legacy sk-.
 		name: "api-key",
-		re:   regexp.MustCompile(`\bsk-[A-Za-z0-9]{20,}\b`),
+		re:   regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{20,}\b`),
 	},
 	{
 		name: "api-key",
@@ -403,6 +409,21 @@ var piiPatterns = []piiDef{
 	{
 		name: "api-key",
 		re:   regexp.MustCompile(`\bAKIA[A-Za-z0-9]{16,}\b`),
+	},
+	// GitHub tokens — classic (ghp_/gho_/ghs_/ghu_/ghr_) and fine-grained (github_pat_)
+	{
+		name: "github-token",
+		re:   regexp.MustCompile(`\bgh[opsur]_[A-Za-z0-9]{36,}\b`),
+	},
+	{
+		name: "github-token",
+		re:   regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{50,}\b`),
+	},
+	// Private keys — PEM blocks span multiple lines (scanned against full text).
+	{
+		name:      "private-key",
+		re:        regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`),
+		multiline: true,
 	},
 	// JWT — three base64url segments separated by dots, minimum 10 chars per segment
 	{
@@ -414,11 +435,44 @@ var piiPatterns = []piiDef{
 		name: "email",
 		re:   regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`),
 	},
-	// Credit card numbers — 13-16 consecutive digits
+	// US Social Security numbers
 	{
-		name: "credit-card",
-		re:   regexp.MustCompile(`\b(?:\d[ \-]?){12,15}\d\b`),
+		name: "ssn",
+		re:   regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`),
 	},
+	// Credit card numbers — 13-16 digit runs that pass the Luhn checksum.
+	{
+		name:     "credit-card",
+		re:       regexp.MustCompile(`\b(?:\d[ \-]?){12,15}\d\b`),
+		validate: luhnValid,
+	},
+}
+
+// luhnValid reports whether the digits in s satisfy the Luhn checksum and form a
+// plausible card length (13-16 digits). Non-digit characters (spaces, hyphens)
+// are ignored. Used to reject digit runs that merely look card-shaped.
+func luhnValid(s string) bool {
+	var digits []int
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			digits = append(digits, int(r-'0'))
+		}
+	}
+	if len(digits) < 13 || len(digits) > 16 {
+		return false
+	}
+	sum := 0
+	parity := len(digits) % 2
+	for i, d := range digits {
+		if i%2 == parity {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+	}
+	return sum%10 == 0
 }
 
 // DetectPII scans text for PII and secret patterns.
@@ -429,13 +483,15 @@ func DetectPII(text string) []Finding {
 	lines := strings.Split(text, "\n")
 	for lineIdx, line := range lines {
 		for _, p := range piiPatterns {
+			if p.multiline {
+				continue // handled in the full-text pass below
+			}
 			matches := p.re.FindAllStringIndex(line, -1)
 			for _, loc := range matches {
 				start, end := loc[0], loc[1]
 				raw := line[start:end]
-				excerpt := raw
-				if len(excerpt) > 12 {
-					excerpt = excerpt[:12] + "..."
+				if p.validate != nil && !p.validate(raw) {
+					continue
 				}
 				findings = append(findings, Finding{
 					Category: CategoryPII,
@@ -443,12 +499,42 @@ func DetectPII(text string) []Finding {
 					Offset:   start,
 					Score:    0.95,
 					Pattern:  p.name,
-					Excerpt:  excerpt,
+					Excerpt:  excerptOf(raw),
 				})
 			}
 		}
 	}
+	// Multiline secrets (PEM blocks) span lines, so scan the full text and derive
+	// the line number from the match offset.
+	for _, p := range piiPatterns {
+		if !p.multiline {
+			continue
+		}
+		for _, loc := range p.re.FindAllStringIndex(text, -1) {
+			raw := text[loc[0]:loc[1]]
+			if p.validate != nil && !p.validate(raw) {
+				continue
+			}
+			findings = append(findings, Finding{
+				Category: CategoryPII,
+				Sentence: strings.Count(text[:loc[0]], "\n") + 1,
+				Offset:   loc[0] - strings.LastIndex(text[:loc[0]], "\n") - 1,
+				Score:    0.95,
+				Pattern:  p.name,
+				Excerpt:  excerptOf(raw),
+			})
+		}
+	}
 	return findings
+}
+
+// excerptOf returns a short, display-safe excerpt of a matched value: the first
+// 12 characters followed by "..." when longer.
+func excerptOf(raw string) string {
+	if len(raw) > 12 {
+		return raw[:12] + "..."
+	}
+	return raw
 }
 
 // SanitizePII replaces PII matches in text with [REDACTED:<type>] placeholders.
@@ -463,6 +549,17 @@ func SanitizePII(text string) (string, []Finding) {
 	redacted := text
 	for _, p := range piiPatterns {
 		replacement := "[REDACTED:" + p.name + "]"
+		if p.validate != nil {
+			// Redact only matches that pass validation, keeping redactions
+			// consistent with the findings reported by DetectPII.
+			redacted = p.re.ReplaceAllStringFunc(redacted, func(m string) string {
+				if p.validate(m) {
+					return replacement
+				}
+				return m
+			})
+			continue
+		}
 		redacted = p.re.ReplaceAllString(redacted, replacement)
 	}
 	return redacted, findings
