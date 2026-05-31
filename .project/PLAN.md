@@ -44,3 +44,13 @@ Source: `.project/SPEC.md` — Full Code Audit (Behavior-Preserving)
 - [x] Consolidated audit report produced → `.project/AUDIT.md` (applied + remaining recommendations)
 - [x] Fixes committed in 7 independently-revertible groups on `cleanup`
 - [x] Remaining behavior-changing recommendations (R3, R5–R15, C1–C3) handed to maintainer in AUDIT.md
+
+### Ending cleanup
+- [ ] Strip leaked planning IDs/lingo from code comments — keep the substantive explanation, drop the reference. Patterns: `CFG-NN`, `SUM-NN`, `D-NN`, `INP-NN`, `SEC-NN`, `LIB-*`, `CLI-NN`, `Pitfall N`, `Phase N`, milestone refs (GSD); also the audit's own `R1/R2/R4` IDs that leaked into the new test comments. Scope: ~9 non-test files (cmd/tldt/main.go, internal/config, internal/fetcher, internal/installer ×2, internal/summarizer ×4, pkg/tldt) + 2 test files. Behavior-preserving (comments only) → verify build + lint + golden I/O unchanged.
+- [ ] Final `/ds-*` pass over the full audit diff (catch anything the changes introduced):
+  - [ ] `/ds-deslop` — slop in new/edited code
+  - [ ] `/ds-code-quality-review` — maintainability of the changes
+  - [ ] `/ds-go-review` — Go idioms (new fetcher transport, error wrapping, clamps)
+  - [ ] `/ds-bug-review` — correctness of the behavior-changing commits (R1/R2/R4)
+  - [ ] `/ds-security-review` — re-verify the rewritten SSRF dial path (R2) and fetcher error/metadata surface (R4)
+  - [ ] Consolidate residual findings into AUDIT.md; apply behavior-preserving fixes, recommend the rest
