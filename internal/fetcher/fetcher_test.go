@@ -1,8 +1,10 @@
 package fetcher
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,10 +24,28 @@ func withLookup(fn func(string) ([]string, error), test func()) {
 	test()
 }
 
-// publicLookup always returns a public IP, bypassing the SSRF pre-check.
-// Use this for httptest-based tests that need to exercise non-SSRF behavior.
-func publicLookup(host string) ([]string, error) {
-	return []string{"93.184.216.34"}, nil
+// withBlockIP temporarily overrides the package-level blockIP for test isolation.
+func withBlockIP(fn func(string, []string) error, test func()) {
+	orig := blockIP
+	blockIP = fn
+	defer func() { blockIP = orig }()
+	test()
+}
+
+// allowAllIPs disables IP validation so httptest servers (which bind to a
+// loopback address that the real guard would block) are reachable. Use for
+// tests exercising non-SSRF behavior.
+func allowAllIPs(host string, addrs []string) error { return nil }
+
+// blockPrivateOnly blocks RFC 1918 IPs but permits loopback, so an httptest
+// server (loopback) stays reachable while a redirect to a private IP is caught.
+func blockPrivateOnly(host string, addrs []string) error {
+	for _, a := range addrs {
+		if ip := net.ParseIP(a); ip != nil && ip.IsPrivate() {
+			return fmt.Errorf("host %q resolves to private IP %s: %w", host, a, ErrSSRFBlocked)
+		}
+	}
+	return nil
 }
 
 // privateLookup returns a lookup function that always returns the given private IP.
@@ -51,7 +71,7 @@ func TestFetch_OK(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	withLookup(publicLookup, func() {
+	withBlockIP(allowAllIPs, func() {
 		res, err := Fetch(ts.URL, testTimeout, testMaxBytes)
 		if err != nil {
 			t.Fatalf("Fetch: unexpected error: %v", err)
@@ -77,7 +97,7 @@ func TestFetch_404(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	withLookup(publicLookup, func() {
+	withBlockIP(allowAllIPs, func() {
 		_, err := Fetch(ts.URL, testTimeout, testMaxBytes)
 		if err == nil {
 			t.Error("Fetch: expected error for 404 response, got nil")
@@ -103,7 +123,7 @@ func TestFetch_Redirect(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	withLookup(publicLookup, func() {
+	withBlockIP(allowAllIPs, func() {
 		res, err := Fetch(ts.URL+"/old", testTimeout, testMaxBytes)
 		if err != nil {
 			t.Fatalf("Fetch redirect: unexpected error: %v", err)
@@ -134,7 +154,7 @@ func TestFetch_NonHTMLContentType(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	withLookup(publicLookup, func() {
+	withBlockIP(allowAllIPs, func() {
 		_, err := Fetch(ts.URL, testTimeout, testMaxBytes)
 		if err == nil {
 			t.Error("Fetch: expected error for application/pdf content-type, got nil")
@@ -163,7 +183,7 @@ func TestFetch_MaxBytesCap(t *testing.T) {
 	defer ts.Close()
 
 	const smallCap = 64
-	withLookup(publicLookup, func() {
+	withBlockIP(allowAllIPs, func() {
 		res, err := Fetch(ts.URL, testTimeout, smallCap)
 		if err != nil {
 			// A tiny cap may yield no extractable article; that is also acceptable
@@ -247,48 +267,65 @@ func TestFetch_SSRFBlockCloudMeta(t *testing.T) {
 	})
 }
 
-// TestFetch_SSRFBlockViaRedirect tests that SSRF is detected on redirect hops.
-// The initial lookup returns a public IP (passes pre-check), but the redirect
-// lookup returns a private IP (triggering ErrSSRFBlocked in CheckRedirect).
+// TestFetch_SSRFBlockViaRedirect verifies SSRF is caught on a redirect hop.
+// The initial host (the loopback httptest server) is permitted, but the redirect
+// target resolves to a private IP and must be blocked at dial time.
 func TestFetch_SSRFBlockViaRedirect(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/target", http.StatusMovedPermanently)
+		http.Redirect(w, r, "http://internal.invalid/target", http.StatusMovedPermanently)
 	}))
 	defer ts.Close()
 
-	callCount := 0
+	// Resolve the redirect target to a private IP; the test server resolves to
+	// its real loopback address. blockPrivateOnly permits loopback but blocks
+	// the private redirect, so the hop is rejected at dial time.
 	withLookup(func(host string) ([]string, error) {
-		callCount++
-		if callCount == 1 {
-			return []string{"93.184.216.34"}, nil // initial: public — passes pre-check
+		if host == "internal.invalid" {
+			return []string{"10.0.0.1"}, nil
 		}
-		return []string{"10.0.0.1"}, nil // redirect: private — blocked by CheckRedirect
+		return []string{"127.0.0.1"}, nil
 	}, func() {
-		_, err := Fetch(ts.URL+"/start", testTimeout, testMaxBytes)
-		if err == nil {
-			t.Fatal("expected SSRF block on redirect to private IP, got nil")
-		}
-		if !errors.Is(err, ErrSSRFBlocked) && !errors.Is(err, ErrRedirectLimit) {
-			t.Errorf("expected ErrSSRFBlocked or ErrRedirectLimit, got: %v", err)
-		}
+		withBlockIP(blockPrivateOnly, func() {
+			_, err := Fetch(ts.URL+"/start", testTimeout, testMaxBytes)
+			if err == nil {
+				t.Fatal("expected SSRF block on redirect to private IP, got nil")
+			}
+			if !errors.Is(err, ErrSSRFBlocked) {
+				t.Errorf("expected ErrSSRFBlocked, got: %v", err)
+			}
+		})
 	})
 }
 
 // TestFetch_RedirectLimitExceeded tests that redirect chains > 5 hops are rejected.
-// Uses publicLookup so the SSRF pre-check passes and the redirect cap is exercised.
+// allowAllIPs permits the loopback test server so the redirect cap is exercised.
 func TestFetch_RedirectLimitExceeded(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, r.URL.String(), http.StatusMovedPermanently)
 	}))
 	defer ts.Close()
 
-	withLookup(publicLookup, func() {
+	withBlockIP(allowAllIPs, func() {
 		_, err := Fetch(ts.URL, testTimeout, testMaxBytes)
 		if err == nil {
 			t.Fatal("expected redirect limit error, got nil")
 		}
 		if !errors.Is(err, ErrRedirectLimit) {
 			t.Errorf("expected ErrRedirectLimit, got: %v", err)
+		}
+	})
+}
+
+// TestSafeDialContext_BlocksResolvedPrivateIP pins the DNS-rebinding fix: the
+// dial guard validates the IP it is about to connect to and refuses to dial a
+// host that resolves to a private address. Because validation and connection
+// share one resolution, a rebinding response cannot slip a private IP past the
+// check.
+func TestSafeDialContext_BlocksResolvedPrivateIP(t *testing.T) {
+	withLookup(privateLookup("10.0.0.1"), func() {
+		_, err := safeDialContext(context.Background(), "tcp", "rebind.invalid:80")
+		if !errors.Is(err, ErrSSRFBlocked) {
+			t.Errorf("safeDialContext should block a host resolving to a private IP, got %v", err)
 		}
 	})
 }

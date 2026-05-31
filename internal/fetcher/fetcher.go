@@ -32,7 +32,42 @@ var (
 
 	// lookupHost is a package-level variable for DNS resolution, enabling test injection.
 	lookupHost = net.LookupHost
+
+	// blockIP validates resolved IPs and is a package-level variable for test
+	// injection. Production uses blockPrivateIP.
+	blockIP = blockPrivateIP
 )
+
+// safeDialContext resolves the address's host, validates every resolved IP, and
+// dials a validated IP literal. Because the IP that passed the SSRF check is the
+// exact IP connected to, a DNS-rebinding response (public on the validating
+// lookup, private on the connecting lookup) cannot reach an internal target.
+// It is wired as http.Transport.DialContext so it runs for the initial request
+// and every redirect hop. TLS verification still uses the URL hostname (the
+// Transport sets ServerName independently of the dialed address).
+func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	addrs, err := lookupHost(host)
+	if err != nil {
+		return nil, fmt.Errorf("resolving host %q: %w", host, err)
+	}
+	if err := blockIP(host, addrs); err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	var lastErr error
+	for _, ip := range addrs {
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip, port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
 
 // blockPrivateIP returns ErrSSRFBlocked if any addr in addrs resolves to a
 // loopback, private, link-local, or cloud metadata IP.
@@ -85,29 +120,19 @@ func Fetch(rawURL string, timeout time.Duration, maxBytes int64) (Result, error)
 		return Result{}, fmt.Errorf("unsupported URL scheme %q: only http and https are allowed", u.Scheme)
 	}
 
-	// 1b. Resolve initial hostname and block private IPs (SSRF pre-check per D-01).
-	addrs, err := lookupHost(u.Hostname())
-	if err != nil {
-		return Result{}, fmt.Errorf("resolving host %q: %w", u.Hostname(), err)
-	}
-	if err := blockPrivateIP(u.Hostname(), addrs); err != nil {
-		return Result{}, err
-	}
-
-	// 2. HTTP client with combined redirect guard (5-hop cap + SSRF check per hop, per D-02).
-	combinedCheckRedirect := func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
-			return fmt.Errorf("too many redirects (%d) fetching %q: %w", len(via), req.URL, ErrRedirectLimit)
-		}
-		hopAddrs, err := lookupHost(req.URL.Hostname())
-		if err != nil {
-			return fmt.Errorf("resolving redirect host %q: %w", req.URL.Hostname(), err)
-		}
-		return blockPrivateIP(req.URL.Hostname(), hopAddrs)
-	}
+	// 2. HTTP client. SSRF validation happens at dial time via safeDialContext
+	// (runs for the initial request and every redirect hop, closing the
+	// DNS-rebinding TOCTOU). CheckRedirect only enforces the 5-hop cap.
+	transport := &http.Transport{DialContext: safeDialContext}
 	client := &http.Client{
-		Timeout:       timeout,
-		CheckRedirect: combinedCheckRedirect,
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects (%d) fetching %q: %w", len(via), req.URL, ErrRedirectLimit)
+			}
+			return nil
+		},
 	}
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, nil)
