@@ -122,9 +122,9 @@ func trSelectTopN(scores []float64, n int, sentences []string) []string {
 func (t *TextRank) SummarizeExplain(text string, n int) ([]string, *ExplainInfo, error) {
 	sentences := TokenizeSentences(text)
 	info := &ExplainInfo{
-		Algorithm:     "textrank",
+		Algorithm:      "textrank",
 		InputSentences: len(sentences),
-		DampingFactor: textRankDamping,
+		DampingFactor:  textRankDamping,
 	}
 	if len(sentences) == 0 {
 		return nil, info, nil

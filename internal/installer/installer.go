@@ -249,4 +249,3 @@ func PatchSettingsJSON(settingsPath string, hookCmd string) error {
 	}
 	return nil
 }
-

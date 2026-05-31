@@ -39,7 +39,7 @@ func privateLookup(ip string) func(string) ([]string, error) {
 func TestFetch_OK(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<html><body>
+		_, _ = fmt.Fprint(w, `<html><body>
 			<nav>Navigation junk</nav>
 			<article>
 			  <p>Alice discovered that the method worked well on long documents.
@@ -89,7 +89,7 @@ func TestFetch_Redirect(t *testing.T) {
 	})
 	mux.HandleFunc("/new", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `<html><body><article><p>Redirected content successfully arrived here.</p></article></body></html>`)
+		_, _ = fmt.Fprint(w, `<html><body><article><p>Redirected content successfully arrived here.</p></article></body></html>`)
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
@@ -118,7 +118,7 @@ func TestFetch_InvalidScheme(t *testing.T) {
 func TestFetch_NonHTMLContentType(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/pdf")
-		fmt.Fprint(w, "%PDF-1.4 fake pdf content")
+		_, _ = fmt.Fprint(w, "%PDF-1.4 fake pdf content")
 	}))
 	defer ts.Close()
 

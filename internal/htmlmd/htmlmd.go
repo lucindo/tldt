@@ -9,9 +9,9 @@
 //   - HTML emails
 //
 // The conversion pipeline:
-//   1. Parse HTML and extract article content (readability algorithm)
-//   2. Convert to clean Markdown (removing most HTML tags)
-//   3. Normalize whitespace and trim
+//  1. Parse HTML and extract article content (readability algorithm)
+//  2. Convert to clean Markdown (removing most HTML tags)
+//  3. Normalize whitespace and trim
 package htmlmd
 
 import (

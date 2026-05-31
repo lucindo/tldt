@@ -13,7 +13,7 @@ func TestInstallSkillFile_WritesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	destPath := filepath.Join(tmpDir, "skills", "tldt", "SKILL.md")
 	if err := installSkillFile(destPath); err != nil {
@@ -37,7 +37,7 @@ func TestInstallSkillFile_MkdirAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	destPath := filepath.Join(tmpDir, "a", "b", "c", "SKILL.md")
 	if err := installSkillFile(destPath); err != nil {
@@ -53,7 +53,7 @@ func TestInstallHookFile_WritesExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	destPath := filepath.Join(tmpDir, "hooks", "tldt-hook.sh")
 	if err := installHookFile(destPath); err != nil {
@@ -85,7 +85,7 @@ func TestPatchSettingsJSON_CreatesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	settingsPath := filepath.Join(tmpDir, "settings.json")
 	hookCmd := "/usr/local/bin/tldt-hook.sh"
@@ -117,7 +117,7 @@ func TestPatchSettingsJSON_MergesExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	settingsPath := filepath.Join(tmpDir, "settings.json")
 	existing := `{"someKey":"someValue","hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/other/hook.sh"}]}]}}`
@@ -156,7 +156,7 @@ func TestPatchSettingsJSON_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	settingsPath := filepath.Join(tmpDir, "settings.json")
 	hookCmd := "/usr/local/bin/tldt-hook.sh"
@@ -188,7 +188,7 @@ func TestResolveTargets_AlwaysIncludesClaude(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	targets := resolveTargets(tmpDir, Options{})
 	if len(targets) == 0 {
@@ -208,7 +208,7 @@ func TestResolveTargets_SkillDirOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	customDir := filepath.Join(tmpDir, "custom-skills")
 	targets := resolveTargets(tmpDir, Options{SkillDir: customDir})
@@ -233,7 +233,7 @@ func TestResolveTargets_DetectsOptionalApps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	// Create .cursor dir to simulate Cursor being installed
 	if err := os.MkdirAll(filepath.Join(tmpDir, ".cursor"), 0755); err != nil {

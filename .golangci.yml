@@ -1,0 +1,6 @@
+version: "2"
+
+# Default linters only (errcheck, govet, ineffassign, staticcheck, unused) —
+# high-signal, low-noise. Adopted as a gate; the tree must stay green on `make lint`.
+linters:
+  default: standard

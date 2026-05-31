@@ -85,7 +85,7 @@ Yes, we've been studying how these models handle reasoning tasks under uncertain
 				t.Skipf("SummarizeWithMatrix failed: %v", err)
 			}
 
-			if matrix == nil || len(matrix) == 0 {
+			if len(matrix) == 0 {
 				t.Skip("Empty matrix returned")
 			}
 

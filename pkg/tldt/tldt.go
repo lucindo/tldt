@@ -260,8 +260,8 @@ func Fetch(urlStr string, opts FetchOptions) (FetchResult, error) {
 	return FetchResult{
 		Text:        text,
 		StatusCode:  http.StatusOK, // Default since fetcher.Fetch doesn't expose this
-		ContentType: "text/html",     // Default since fetcher.Fetch doesn't expose this
-		FinalURL:    urlStr,          // Default since fetcher.Fetch doesn't expose this
+		ContentType: "text/html",   // Default since fetcher.Fetch doesn't expose this
+		FinalURL:    urlStr,        // Default since fetcher.Fetch doesn't expose this
 	}, nil
 }
 

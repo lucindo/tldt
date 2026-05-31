@@ -59,9 +59,10 @@ deps:
 clean:
 	rm -f $(BINARY)
 
-## lint: run go vet
+## lint: run go vet and golangci-lint
 lint:
 	go vet ./...
+	golangci-lint run ./...
 
 ## run: build and run with stdin (usage example)
 run: build

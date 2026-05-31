@@ -108,7 +108,7 @@ func Fetch(rawURL string, timeout time.Duration, maxBytes int64) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("fetching %q: %w", rawURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// 4. Non-2xx status is always an error.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

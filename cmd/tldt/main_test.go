@@ -48,7 +48,7 @@ func TestMain(m *testing.M) {
 	}
 	binaryPath = bin
 	code := m.Run()
-	os.RemoveAll(tmp)
+	_ = os.RemoveAll(tmp)
 	os.Exit(code)
 }
 
@@ -79,8 +79,8 @@ func writeTempFile(t *testing.T, content string) string {
 	if _, err := f.WriteString(content); err != nil {
 		t.Fatalf("cannot write temp file: %v", err)
 	}
-	f.Close()
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	_ = f.Close()
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 	return f.Name()
 }
 
@@ -198,12 +198,12 @@ func TestResolveInputBytes_Stdin(t *testing.T) {
 	os.Stdin = r
 	defer func() {
 		os.Stdin = old
-		r.Close()
+		_ = r.Close()
 	}()
 	if _, err := w.WriteString("piped content here"); err != nil {
 		t.Fatalf("write pipe: %v", err)
 	}
-	w.Close()
+	_ = w.Close()
 
 	got, err := resolveInputBytes([]string{}, "", "")
 	if err != nil {
@@ -595,7 +595,7 @@ func TestMain_NoInput_ExitsNonZero(t *testing.T) {
 func TestMain_URLFlag_SSRFBlocksLoopback(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `<html><body><article><p>Content that should never be reached.</p></article></body></html>`)
+		_, _ = fmt.Fprint(w, `<html><body><article><p>Content that should never be reached.</p></article></body></html>`)
 	}))
 	defer ts.Close()
 

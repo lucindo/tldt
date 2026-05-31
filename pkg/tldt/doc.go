@@ -7,7 +7,7 @@
 //
 // Import: github.com/gleicon/tldt/pkg/tldt
 //
-// Quick Start
+// # Quick Start
 //
 // Basic summarization with defaults (LexRank, 5 sentences):
 //
@@ -17,7 +17,7 @@
 //	}
 //	fmt.Println(result.Summary)
 //
-// PII-Aware Pipeline
+// # PII-Aware Pipeline
 //
 // Run the full processing pipeline with PII redaction and injection detection:
 //
@@ -41,7 +41,7 @@
 //	        finding.Pattern, finding.Line, finding.Excerpt)
 //	}
 //
-// URL Fetching
+// # URL Fetching
 //
 // Fetch and summarize a webpage:
 //
@@ -59,7 +59,7 @@
 //	    Sentences: 3,
 //	})
 //
-// Individual Operations
+// # Individual Operations
 //
 // Each stage can be used independently:
 //
@@ -85,20 +85,24 @@
 //	redacted, findings := tldt.SanitizePII(text)
 //	fmt.Printf("Redacted %d findings\n", len(findings))
 //
-// Algorithm Selection
+// # Algorithm Selection
 //
 // Four algorithms are available:
+//
 //   - "lexrank": TF-IDF cosine similarity + eigenvector centrality (default)
+//
 //   - "textrank": Word overlap + PageRank damping
+//
 //   - "graph": Bag-of-words baseline (didasy/tldr library)
+//
 //   - "ensemble": Average of LexRank and TextRank scores
 //
-//	result, _ := tldt.Summarize(text, tldt.SummarizeOptions{
-//	    Algorithm: "ensemble",
-//	    Sentences: 7,
-//	})
+//     result, _ := tldt.Summarize(text, tldt.SummarizeOptions{
+//     Algorithm: "ensemble",
+//     Sentences: 7,
+//     })
 //
-// Error Handling
+// # Error Handling
 //
 // All errors are wrapped with context. Use errors.Is for sentinel errors:
 //
@@ -109,9 +113,8 @@
 //	    // Too many redirects
 //	}
 //
-// Thread Safety
+// # Thread Safety
 //
 // All functions are safe for concurrent use. There is no shared state.
 // Each call operates on its own data.
-//
 package tldt
