@@ -52,15 +52,21 @@ func TestFetch_OK(t *testing.T) {
 	defer ts.Close()
 
 	withLookup(publicLookup, func() {
-		text, err := Fetch(ts.URL, testTimeout, testMaxBytes)
+		res, err := Fetch(ts.URL, testTimeout, testMaxBytes)
 		if err != nil {
 			t.Fatalf("Fetch: unexpected error: %v", err)
 		}
-		if strings.TrimSpace(text) == "" {
+		if strings.TrimSpace(res.Text) == "" {
 			t.Error("Fetch: expected non-empty text content, got empty string")
 		}
-		if strings.Contains(text, "Navigation junk") {
-			t.Errorf("Fetch: nav junk leaked into text content: %q", text)
+		if strings.Contains(res.Text, "Navigation junk") {
+			t.Errorf("Fetch: nav junk leaked into text content: %q", res.Text)
+		}
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("Fetch: StatusCode = %d, want 200", res.StatusCode)
+		}
+		if !strings.Contains(res.ContentType, "text/html") {
+			t.Errorf("Fetch: ContentType = %q, want text/html", res.ContentType)
 		}
 	})
 }
@@ -75,6 +81,9 @@ func TestFetch_404(t *testing.T) {
 		_, err := Fetch(ts.URL, testTimeout, testMaxBytes)
 		if err == nil {
 			t.Error("Fetch: expected error for 404 response, got nil")
+		}
+		if !errors.Is(err, ErrHTTPError) {
+			t.Errorf("Fetch: expected ErrHTTPError for non-2xx, got %v", err)
 		}
 		if !strings.Contains(err.Error(), "404") {
 			t.Errorf("Fetch: expected '404' in error message, got %q", err.Error())
@@ -95,12 +104,15 @@ func TestFetch_Redirect(t *testing.T) {
 	defer ts.Close()
 
 	withLookup(publicLookup, func() {
-		text, err := Fetch(ts.URL+"/old", testTimeout, testMaxBytes)
+		res, err := Fetch(ts.URL+"/old", testTimeout, testMaxBytes)
 		if err != nil {
 			t.Fatalf("Fetch redirect: unexpected error: %v", err)
 		}
-		if !strings.Contains(text, "Redirected content") {
-			t.Errorf("Fetch redirect: expected 'Redirected content' in text, got %q", text)
+		if !strings.Contains(res.Text, "Redirected content") {
+			t.Errorf("Fetch redirect: expected 'Redirected content' in text, got %q", res.Text)
+		}
+		if !strings.Contains(res.FinalURL, "/new") {
+			t.Errorf("Fetch redirect: FinalURL = %q, want it to end in /new", res.FinalURL)
 		}
 	})
 }
@@ -127,6 +139,9 @@ func TestFetch_NonHTMLContentType(t *testing.T) {
 		if err == nil {
 			t.Error("Fetch: expected error for application/pdf content-type, got nil")
 		}
+		if !errors.Is(err, ErrNonHTML) {
+			t.Errorf("Fetch: expected ErrNonHTML for non-HTML content-type, got %v", err)
+		}
 		if !strings.Contains(err.Error(), "unsupported content type") {
 			t.Errorf("Fetch: expected 'unsupported content type' in error, got %q", err.Error())
 		}
@@ -149,7 +164,7 @@ func TestFetch_MaxBytesCap(t *testing.T) {
 
 	const smallCap = 64
 	withLookup(publicLookup, func() {
-		text, err := Fetch(ts.URL, testTimeout, smallCap)
+		res, err := Fetch(ts.URL, testTimeout, smallCap)
 		if err != nil {
 			// A tiny cap may yield no extractable article; that is also acceptable
 			// truncation behavior. What must never happen is the marker surviving.
@@ -158,8 +173,8 @@ func TestFetch_MaxBytesCap(t *testing.T) {
 			}
 			return
 		}
-		if strings.Contains(text, marker) {
-			t.Errorf("Fetch: content beyond maxBytes=%d cap leaked into text (found %q)", smallCap, marker)
+		if strings.Contains(res.Text, marker) {
+			t.Errorf("Fetch: content beyond maxBytes=%d cap leaked into text (found %q)", smallCap, res.Text)
 		}
 	})
 }

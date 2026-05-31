@@ -3,7 +3,6 @@ package tldt
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -224,36 +223,26 @@ func Fetch(urlStr string, opts FetchOptions) (FetchResult, error) {
 		opts.MaxBytes = 5 * 1024 * 1024
 	}
 
-	text, err := fetcher.Fetch(urlStr, opts.Timeout, opts.MaxBytes)
+	res, err := fetcher.Fetch(urlStr, opts.Timeout, opts.MaxBytes)
 	if err != nil {
-		// Determine error type for sentinel error wrapping
-		errStr := err.Error()
-		if errors.Is(err, fetcher.ErrSSRFBlocked) {
-			return FetchResult{}, fmt.Errorf("tldt.Fetch: %w", err)
-		}
-		if errors.Is(err, fetcher.ErrRedirectLimit) {
-			return FetchResult{}, fmt.Errorf("tldt.Fetch: %w", err)
-		}
-		// Check for HTTP error (non-2xx status)
-		if strings.Contains(errStr, "HTTP ") && strings.Contains(errStr, "fetching") {
+		// Map fetcher sentinels to the package's public sentinels via errors.Is.
+		switch {
+		case errors.Is(err, fetcher.ErrHTTPError):
 			return FetchResult{}, fmt.Errorf("tldt.Fetch: %w: %v", ErrHTTPError, err)
-		}
-		// Check for non-HTML content type
-		if strings.Contains(errStr, "unsupported content type") {
+		case errors.Is(err, fetcher.ErrNonHTML):
 			return FetchResult{}, fmt.Errorf("tldt.Fetch: %w: %v", ErrNonHTML, err)
+		default:
+			// ErrSSRFBlocked / ErrRedirectLimit (re-exported) and any other error
+			// pass through unchanged for the caller to match with errors.Is.
+			return FetchResult{}, fmt.Errorf("tldt.Fetch: %w", err)
 		}
-		// Unknown error - still wrap with context
-		return FetchResult{}, fmt.Errorf("tldt.Fetch: %w", err)
 	}
 
-	// On success, we don't have access to the actual HTTP response metadata
-	// since fetcher.Fetch only returns the text. Return with defaults.
-	// NOTE: If fetcher is extended to return metadata, update this to include it.
 	return FetchResult{
-		Text:        text,
-		StatusCode:  http.StatusOK, // Default since fetcher.Fetch doesn't expose this
-		ContentType: "text/html",   // Default since fetcher.Fetch doesn't expose this
-		FinalURL:    urlStr,        // Default since fetcher.Fetch doesn't expose this
+		Text:        res.Text,
+		StatusCode:  res.StatusCode,
+		ContentType: res.ContentType,
+		FinalURL:    res.FinalURL,
 	}, nil
 }
 

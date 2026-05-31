@@ -21,6 +21,10 @@ var (
 	ErrSSRFBlocked = errors.New("SSRF blocked: private or reserved IP address")
 	// ErrRedirectLimit is returned when the redirect chain exceeds the 5-hop cap.
 	ErrRedirectLimit = errors.New("redirect limit exceeded")
+	// ErrHTTPError is returned when the server responds with a non-2xx status.
+	ErrHTTPError = errors.New("non-2xx HTTP status")
+	// ErrNonHTML is returned when the response Content-Type is not text/html.
+	ErrNonHTML = errors.New("unsupported content type")
 
 	// cloudMetadataIPv6 is the EC2 IPv6 metadata endpoint.
 	// ip.IsPrivate() already covers fd00::/8 (ULA), but explicit check documents intent.
@@ -55,30 +59,39 @@ func blockPrivateIP(host string, addrs []string) error {
 	return nil
 }
 
-// Fetch fetches rawURL and returns the main article text content.
+// Result carries the extracted text alongside the response metadata observed
+// while fetching, so callers can inspect the outcome without re-fetching.
+type Result struct {
+	Text        string // extracted main article text
+	StatusCode  int    // HTTP status code of the final response
+	ContentType string // response Content-Type header
+	FinalURL    string // final URL after any redirects
+}
+
+// Fetch fetches rawURL and returns the main article text plus response metadata.
 // timeout applies to the entire HTTP round-trip (http.Client level).
 // maxBytes caps the response body read to prevent memory exhaustion.
 //
-// Only http and https schemes are accepted. Non-2xx status codes and
-// non-HTML content types are returned as errors. HTTP redirects are
-// followed with SSRF + 5-hop guard.
-func Fetch(rawURL string, timeout time.Duration, maxBytes int64) (string, error) {
+// Only http and https schemes are accepted. Non-2xx status codes (ErrHTTPError)
+// and non-HTML content types (ErrNonHTML) are returned as errors. HTTP redirects
+// are followed with SSRF + 5-hop guard.
+func Fetch(rawURL string, timeout time.Duration, maxBytes int64) (Result, error) {
 	// 1. Validate scheme — block file://, ftp://, etc.
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return "", fmt.Errorf("invalid URL %q: %w", rawURL, err)
+		return Result{}, fmt.Errorf("invalid URL %q: %w", rawURL, err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("unsupported URL scheme %q: only http and https are allowed", u.Scheme)
+		return Result{}, fmt.Errorf("unsupported URL scheme %q: only http and https are allowed", u.Scheme)
 	}
 
 	// 1b. Resolve initial hostname and block private IPs (SSRF pre-check per D-01).
 	addrs, err := lookupHost(u.Hostname())
 	if err != nil {
-		return "", fmt.Errorf("resolving host %q: %w", u.Hostname(), err)
+		return Result{}, fmt.Errorf("resolving host %q: %w", u.Hostname(), err)
 	}
 	if err := blockPrivateIP(u.Hostname(), addrs); err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	// 2. HTTP client with combined redirect guard (5-hop cap + SSRF check per hop, per D-02).
@@ -99,27 +112,27 @@ func Fetch(rawURL string, timeout time.Duration, maxBytes int64) (string, error)
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("building request for %q: %w", rawURL, err)
+		return Result{}, fmt.Errorf("building request for %q: %w", rawURL, err)
 	}
 	req.Header.Set("User-Agent", "tldt/2.0 (https://github.com/gleicon/tldt)")
 
 	// 3. Execute — net/http.Client follows redirects with SSRF + 5-hop guard.
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("fetching %q: %w", rawURL, err)
+		return Result{}, fmt.Errorf("fetching %q: %w", rawURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	// 4. Non-2xx status is always an error.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("HTTP %d fetching %q", resp.StatusCode, rawURL)
+		return Result{}, fmt.Errorf("HTTP %d fetching %q: %w", resp.StatusCode, rawURL, ErrHTTPError)
 	}
 
 	// 5. Content-Type guard — use Contains because real headers are
 	// "text/html; charset=utf-8" (Pitfall 2 in research).
 	ct := resp.Header.Get("Content-Type")
 	if !strings.Contains(ct, "text/html") {
-		return "", fmt.Errorf("unsupported content type %q at %q (expected text/html)", ct, rawURL)
+		return Result{}, fmt.Errorf("unsupported content type %q at %q (expected text/html): %w", ct, rawURL, ErrNonHTML)
 	}
 
 	// 6. Cap response body to prevent memory exhaustion (DoS mitigation).
@@ -132,12 +145,17 @@ func Fetch(rawURL string, timeout time.Duration, maxBytes int64) (string, error)
 	// resolution, not a raw string (Pitfall 5 in research).
 	article, err := readability.FromReader(limited, u)
 	if err != nil {
-		return "", fmt.Errorf("extracting content from %q: %w", rawURL, err)
+		return Result{}, fmt.Errorf("extracting content from %q: %w", rawURL, err)
 	}
 
 	text := strings.TrimSpace(article.TextContent)
 	if text == "" {
-		return "", fmt.Errorf("no readable text content found at %q", rawURL)
+		return Result{}, fmt.Errorf("no readable text content found at %q", rawURL)
 	}
-	return text, nil
+	return Result{
+		Text:        text,
+		StatusCode:  resp.StatusCode,
+		ContentType: ct,
+		FinalURL:    resp.Request.URL.String(),
+	}, nil
 }
