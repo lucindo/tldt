@@ -215,6 +215,16 @@ func TestBlockPrivateIP(t *testing.T) {
 		{"private-192", "internal", []string{"192.168.1.1"}, true},
 		{"link-local", "metadata", []string{"169.254.169.254"}, true},
 		{"cloud-meta-v6", "metadata", []string{"fd00:ec2::254"}, true},
+		// R3 additions: ranges the net.IP helpers do not cover.
+		{"unspecified-v4", "any", []string{"0.0.0.0"}, true},
+		{"unspecified-v6", "any", []string{"::"}, true},
+		{"cgnat", "carrier", []string{"100.64.0.1"}, true},
+		{"benchmark", "bench", []string{"198.18.0.1"}, true},
+		{"nat64", "nat", []string{"64:ff9b::1"}, true},
+		// IPv4-mapped IPv6 is already handled: net.ParseIP normalizes via To4(),
+		// so IsLoopback/IsPrivate catch these without extra code.
+		{"mapped-loopback", "mapped", []string{"::ffff:127.0.0.1"}, true},
+		{"mapped-private", "mapped", []string{"::ffff:10.0.0.1"}, true},
 		{"public-ip", "example.com", []string{"93.184.216.34"}, false},
 		{"nil-parse", "bad", []string{"not-an-ip"}, false},
 	}

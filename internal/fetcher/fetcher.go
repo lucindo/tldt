@@ -30,6 +30,15 @@ var (
 	// ip.IsPrivate() already covers fd00::/8 (ULA), but explicit check documents intent.
 	cloudMetadataIPv6 = net.ParseIP("fd00:ec2::254")
 
+	// reservedBlocks are ranges the net.IP helpers (IsPrivate/IsLoopback/
+	// IsLinkLocalUnicast) do not cover but that must still be blocked to prevent
+	// SSRF. Parsed once at init from constant literals.
+	reservedBlocks = parseCIDRs(
+		"100.64.0.0/10", // CGNAT shared address space (RFC 6598)
+		"198.18.0.0/15", // benchmarking range (RFC 2544)
+		"64:ff9b::/96",  // NAT64 well-known prefix (RFC 6052) — can embed private IPv4
+	)
+
 	// lookupHost is a package-level variable for DNS resolution, enabling test injection.
 	lookupHost = net.LookupHost
 
@@ -87,11 +96,34 @@ func blockPrivateIP(host string, addrs []string) error {
 		if ip.IsLinkLocalUnicast() {
 			return fmt.Errorf("host %q resolves to link-local IP %s: %w", host, addr, ErrSSRFBlocked)
 		}
+		if ip.IsUnspecified() {
+			return fmt.Errorf("host %q resolves to unspecified address %s: %w", host, addr, ErrSSRFBlocked)
+		}
 		if ip.Equal(cloudMetadataIPv6) {
 			return fmt.Errorf("host %q resolves to cloud metadata IP %s: %w", host, addr, ErrSSRFBlocked)
 		}
+		for _, block := range reservedBlocks {
+			if block.Contains(ip) {
+				return fmt.Errorf("host %q resolves to reserved IP %s: %w", host, addr, ErrSSRFBlocked)
+			}
+		}
 	}
 	return nil
+}
+
+// parseCIDRs parses constant CIDR literals into networks. It panics on a
+// malformed literal — a programmer error caught at package init, never at
+// runtime (mirrors the regexp.MustCompile convention).
+func parseCIDRs(cidrs ...string) []*net.IPNet {
+	nets := make([]*net.IPNet, len(cidrs))
+	for i, c := range cidrs {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			panic(fmt.Sprintf("fetcher: invalid reserved CIDR %q: %v", c, err))
+		}
+		nets[i] = n
+	}
+	return nets
 }
 
 // Result carries the extracted text alongside the response metadata observed
