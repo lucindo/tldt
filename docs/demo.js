@@ -103,8 +103,8 @@ function runSummarize() {
 
     // Call WASM function
     try {
-        const resultJSON = tldtSummarize(config);
-        const result = JSON.parse(resultJSON);
+        const result = tldtSummarize(config);
+        // result is already a JS object from Go, no need to JSON.parse
 
         displayResult(result);
     } catch (err) {
