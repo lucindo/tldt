@@ -82,6 +82,8 @@ tldt -f article.txt --format markdown
 | `--skill-dir <dir>` | — | Override skill install directory |
 | `--target <app>` | — | Install target: `claude`, `cursor`, `opencode`, `agents`, or `all` |
 
+> `--sanitize-pii` favors over-redaction: its high-entropy gate can also redact dense base64 that is not secret (content hashes, signatures, key fingerprints) as `[REDACTED:secret]`. Use `--detect-pii` to report matches without modifying text.
+
 ---
 
 ## Output formats

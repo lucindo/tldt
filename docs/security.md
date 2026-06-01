@@ -25,6 +25,8 @@ injection-detect: WARNING — input flagged as suspicious
 
 **Mitigation:** `--detect-pii` scans for email addresses, API key prefixes (Bearer, sk-, AIza, AKIA), GitHub/Slack tokens, PEM private keys, JWTs, SSNs, and Luhn-valid credit cards. `--sanitize-pii` redacts those matches — plus high-entropy base64 key material (e.g. prefix-less secret keys) — with `[REDACTED:<type>]` placeholders before summarization. Detection reports to stderr; redaction count reported.
 
+The high-entropy gate favors over-redaction: it can also redact dense base64 that is *not* secret — content hashes, signatures, key fingerprints — as `[REDACTED:secret]`, silently dropping it from the summary. This is the intended trade-off for an opt-in redactor (redacting a hash is safer than leaking a key); use `--detect-pii` to report the same matches without modifying text if you need to inspect first.
+
 **Example:**
 
 ```bash

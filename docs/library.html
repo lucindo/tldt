@@ -455,7 +455,7 @@
         <div class="api-sig">func SanitizePII(text string) (string, []PIIFinding)</div>
       </div>
       <div class="api-body">
-        <p>Redacts PII matches with [REDACTED:pattern] placeholders. Returns redacted text and findings.</p>
+        <p>Redacts PII matches with [REDACTED:pattern] placeholders. Returns redacted text and findings. The high-entropy gate favors over-redaction: dense base64 that is not secret (content hashes, signatures, key fingerprints) can also be redacted as [REDACTED:secret]. Use DetectPII to inspect matches without modifying text.</p>
       </div>
     </div>
 
