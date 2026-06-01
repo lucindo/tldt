@@ -19,10 +19,11 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -46,6 +47,39 @@ type Info struct {
 	Version     string `json:"version"`
 }
 
+// httpResult holds a fetched body alongside response metadata.
+type httpResult struct {
+	Text        string
+	StatusCode  int
+	ContentType string
+	FinalURL    string
+}
+
+// fetchJSON retrieves url with a timeout and a response-size cap, returning the
+// raw body. Unlike tldt.Fetch (which extracts article text from HTML), it leaves
+// the body untouched — suitable for JSON API documents.
+func fetchJSON(url string, timeout time.Duration, maxBytes int64) (httpResult, error) {
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Get(url)
+	if err != nil {
+		return httpResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return httpResult{}, fmt.Errorf("unexpected HTTP status %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+	if err != nil {
+		return httpResult{}, err
+	}
+	return httpResult{
+		Text:        string(data),
+		StatusCode:  resp.StatusCode,
+		ContentType: resp.Header.Get("Content-Type"),
+		FinalURL:    resp.Request.URL.String(),
+	}, nil
+}
+
 func main() {
 	url := flag.String("url", "https://petstore.swagger.io/v2/swagger.json", "OpenAPI/Swagger JSON URL")
 	sanitize := flag.Bool("sanitize", true, "Strip invisible Unicode")
@@ -60,18 +94,11 @@ func main() {
 	fmt.Printf("Fetching OpenAPI documentation from: %s\n", *url)
 	fmt.Println()
 
-	// Fetch the OpenAPI document
-	fetchResult, err := tldt.Fetch(*url, tldt.FetchOptions{
-		Timeout:  *timeout,
-		MaxBytes: 10 * 1024 * 1024, // 10MB max
-	})
+	// Fetch the OpenAPI document. tldt.Fetch extracts article text from HTML and
+	// rejects non-HTML content, so OpenAPI/Swagger JSON is retrieved here with a
+	// plain net/http client (timeout + response-size cap).
+	fetchResult, err := fetchJSON(*url, *timeout, 10*1024*1024)
 	if err != nil {
-		if errors.Is(err, tldt.ErrSSRFBlocked) {
-			log.Fatalf("SSRF protection triggered: %v", err)
-		}
-		if errors.Is(err, tldt.ErrRedirectLimit) {
-			log.Fatalf("Too many redirects: %v", err)
-		}
 		log.Fatalf("Failed to fetch URL: %v", err)
 	}
 
