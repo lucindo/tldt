@@ -32,16 +32,13 @@
 | `examples/` | Standalone Go programs (own go.mod) demonstrating library use: `basic`, `pipeline`, `html-processor`, `openapi-client`. |
 | `docs/` | `security.md` (OWASP LLM Top 10 coverage), `index.html`, `library.html`. |
 | `test-data/` | Real-world fixtures (Wikipedia, YouTube transcript, longform, edge cases). |
-| `src/` | **Legacy** `resumator` HTTP service — all `//go:build ignore`, not part of the build. Historical origin only. |
-| `assets/`, `SSL/` | Legacy site assets and SSL Makefile (from resumator). |
-| `.planning/` | GSD planning artifacts (requirements, roadmap, state, research). |
 
 ## Constraints
 
 - **No LLM / no network dependency for core function** — summarization is purely local and deterministic; adding cloud/LLM calls is antithetical to the tool's purpose.
 - **Extractive only** — output must be verbatim source sentences; no abstractive/generative summarization.
 - **Pipe-safe stdout** — only the summary goes to stdout; all stats/warnings/diagnostics go to stderr (never break shell pipes). TTY detection governs interactive behavior.
-- **No HTTP server / persistence** — the web API, Redis, and auth from the `resumator` origin are dropped; `src/` is dead code kept for history (do not revive without intent).
+- **No HTTP server / persistence** — the web API, Redis, and auth from the `resumator` origin are dropped. The legacy `resumator` tree (`src/`, `assets/`, `SSL/`) was removed; see git history if needed.
 - **CLI depends on the library** — `cmd/tldt` routes core operations through `pkg/tldt` (direct `internal/` imports limited to `config`, `formatter`, `installer`). Keep `pkg/tldt` the authoritative API.
 - **Security at the boundary** — URL fetching enforces SSRF blocklist, byte cap, and redirect cap; untrusted text is validated where it enters.
 - **Go conventions (per AGENTS.md):** `go test -race ./...` clean, `golangci-lint`/`go vet` clean, table-driven tests, no real network/filesystem in unit tests (use `httptest`), functions kept under ~70 lines.

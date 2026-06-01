@@ -54,11 +54,17 @@ Source: `.project/SPEC.md` — Full Code Audit (Behavior-Preserving)
 - [x] Remaining behavior-changing recommendations (R3, R5–R15, C1–C3) handed to maintainer in AUDIT.md
 
 ### Ending cleanup
-- [ ] Strip leaked planning IDs/lingo from code comments — keep the substantive explanation, drop the reference. Patterns: `CFG-NN`, `SUM-NN`, `D-NN`, `INP-NN`, `SEC-NN`, `LIB-*`, `CLI-NN`, `Pitfall N`, `Phase N`, milestone refs (GSD); also the audit's own `R1/R2/R4` IDs that leaked into the new test comments. Scope: ~9 non-test files (cmd/tldt/main.go, internal/config, internal/fetcher, internal/installer ×2, internal/summarizer ×4, pkg/tldt) + 2 test files. Behavior-preserving (comments only) → verify build + lint + golden I/O unchanged.
-- [ ] Final `/ds-*` pass over the full audit diff (catch anything the changes introduced):
-  - [ ] `/ds-deslop` — slop in new/edited code
-  - [ ] `/ds-code-quality-review` — maintainability of the changes
-  - [ ] `/ds-go-review` — Go idioms (new fetcher transport, error wrapping, clamps)
-  - [ ] `/ds-bug-review` — correctness of the behavior-changing commits (R1/R2/R4)
-  - [ ] `/ds-security-review` — re-verify the rewritten SSRF dial path (R2) and fetcher error/metadata surface (R4)
+- [x] Strip leaked planning IDs/lingo from code comments (commit 163cd34) — GSD IDs + audit R1 IDs removed across 13 files; comments only, golden/API unchanged.
+- [x] R15 (commit 20d1c23): `go mod tidy` examples basic/pipeline/openapi-client (pre-existing stale go.mod). main module untouched.
+- [x] R3 (commit 9228002): SSRF blocklist — unspecified/CGNAT/NAT64/benchmark; IPv4-mapped covered by regression tests.
+- [x] R6 (commit 27ec822): PII coverage — modern sk-/GitHub/PEM/SSN + Luhn credit-card; detect/redact kept consistent.
+- [ ] Reviewing remaining B/C items one-by-one with maintainer (R5 in progress; then R7–R14, C1–C3).
+- [ ] **Pre-pass hygiene (before reviews):** run `go fix ./...` across all modules, then resolve every gopls hint: `gopls check -severity=hint $(find . -name "*.go")`. Apply behavior-preserving fixes; verify build + lint + `test -race` + golden I/O + API unchanged. Commit as its own group.
+- [ ] Final `/ds-*` pass over the full audit diff — **run sequentially, one command at a time** (may delegate each to an agent, but never in parallel). **`/ds-deslop` runs LAST.** Order:
+  1. [ ] `/ds-code-quality-review` — maintainability of the changes
+  2. [ ] `/ds-go-review` — Go idioms (fetcher transport/SSRF, error wrapping, clamps, new PII paths)
+  3. [ ] `/ds-bug-review` — correctness of the behavior-changing commits (R1/R2/R3/R4/R5/R6)
+  4. [ ] `/ds-security-review` — re-verify SSRF dial path + blocklist (R2/R3) and PII detect/redact surface (R4/R6)
+  5. [ ] `/ds-test-quality-review` — coverage of the new behavior
+  6. [ ] `/ds-deslop` — slop in new/edited code (LAST)
   - [ ] Consolidate residual findings into AUDIT.md; apply behavior-preserving fixes, recommend the rest
