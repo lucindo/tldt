@@ -1,17 +1,8 @@
-// Package tldt provides an embeddable Go API for text summarization,
-// prompt injection detection, and Unicode sanitization. It wraps the
-// internal packages and is the only public API surface of the tldt module.
-//
-// All functions are stateless -- no global mutable state. Options are passed
-// explicitly via plain structs; zero-value fields receive sensible defaults.
-//
-// Import path: github.com/gleicon/tldt/pkg/tldt
 package tldt
 
 import (
-	"errors"
+	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -36,7 +27,7 @@ const DefaultOutlierThreshold = detector.DefaultOutlierThreshold
 
 // DetectOptions controls detection behavior.
 type DetectOptions struct {
-	OutlierThreshold float64 // default: 0.85 (DefaultOutlierThreshold)
+	OutlierThreshold float64 // default: 0.99 (DefaultOutlierThreshold)
 }
 
 // FetchOptions controls URL fetching behavior.
@@ -92,13 +83,14 @@ type PIIFinding struct {
 
 // PipelineResult is the output of Pipeline.
 type PipelineResult struct {
-	Summary     string
-	TokensIn    int
-	TokensOut   int
-	Reduction   int
-	Warnings    []string
-	Redactions  int
-	PIIFindings []PIIFinding // populated when DetectPII or SanitizePII is true; nil otherwise
+	Summary           string
+	TokensIn          int
+	TokensOut         int
+	Reduction         int
+	Warnings          []string
+	InvisiblesRemoved int          // invisible Unicode codepoints stripped by the Sanitize stage
+	PIIRedactions     int          // PII/secret spans redacted by the SanitizePII stage (== len(PIIFindings) on that path)
+	PIIFindings       []PIIFinding // populated when DetectPII or SanitizePII is true; nil otherwise
 }
 
 // FetchResult is the output of Fetch with full HTTP metadata.
@@ -116,8 +108,8 @@ type FetchResult struct {
 var (
 	ErrSSRFBlocked   = fetcher.ErrSSRFBlocked
 	ErrRedirectLimit = fetcher.ErrRedirectLimit
-	ErrHTTPError     = errors.New("tldt: HTTP error")
-	ErrNonHTML       = errors.New("tldt: not HTML content")
+	ErrHTTPError     = fetcher.ErrHTTPError
+	ErrNonHTML       = fetcher.ErrNonHTML
 )
 
 // --- Default helpers ---
@@ -182,9 +174,42 @@ func Summarize(text string, opts SummarizeOptions) (Result, error) {
 }
 
 // Detect runs injection and encoding detection on text without summarizing.
-// Returns findings and human-readable warning lines.
+// It runs pattern, encoding, and confusable detection, then statistical outlier
+// detection: a LexRank similarity matrix is built over text and any sentence
+// whose mean similarity to the rest falls below opts.OutlierThreshold is flagged
+// as an outlier finding. A zero/negative threshold uses DefaultOutlierThreshold.
+// Building the similarity matrix is O(n^2) in the sentence count.
+//
+// Outlier findings are appended to Report.Findings; Report.MaxScore and
+// Report.Suspicious continue to reflect injection-pattern confidence only,
+// because an outlier score is a dissimilarity metric on a different scale.
+//
+// Returns the findings plus human-readable warning lines. An error is returned
+// only if the similarity matrix cannot be built.
 func Detect(text string, opts DetectOptions) (DetectResult, error) {
 	report := detector.Analyze(text)
+
+	threshold := opts.OutlierThreshold
+	if threshold <= 0 {
+		threshold = DefaultOutlierThreshold
+	}
+	sentences := summarizer.TokenizeSentences(text)
+	if len(sentences) > 0 {
+		lr, err := summarizer.New("lexrank")
+		if err != nil {
+			return DetectResult{}, fmt.Errorf("tldt.Detect: %w", err)
+		}
+		ms, ok := lr.(summarizer.MatrixSummarizer)
+		if !ok {
+			return DetectResult{}, fmt.Errorf("tldt.Detect: lexrank does not provide a similarity matrix")
+		}
+		_, matrix, err := ms.SummarizeWithMatrix(text, len(sentences))
+		if err != nil {
+			return DetectResult{}, fmt.Errorf("tldt.Detect: outlier matrix: %w", err)
+		}
+		report.Findings = append(report.Findings, detector.DetectOutliers(sentences, matrix, threshold)...)
+	}
+
 	var warnings []string
 	if report.Suspicious {
 		warnings = append(warnings, "injection-detect: WARNING -- input flagged as suspicious")
@@ -220,11 +245,12 @@ func SanitizePII(text string) (string, []PIIFinding) {
 
 // Fetch retrieves a URL and extracts the main article text using readability.
 // SSRF protection blocks private/loopback/link-local IPs. Redirect chain capped at 5 hops.
+// ctx cancels the in-flight request and propagates to every dial.
 //
 // On success, returns a FetchResult with extracted text and HTTP metadata.
 // Errors are wrapped with context: use errors.Is() to check for sentinel errors
 // (ErrSSRFBlocked, ErrRedirectLimit, ErrHTTPError, ErrNonHTML).
-func Fetch(urlStr string, opts FetchOptions) (FetchResult, error) {
+func Fetch(ctx context.Context, urlStr string, opts FetchOptions) (FetchResult, error) {
 	if opts.Timeout == 0 {
 		opts.Timeout = 30 * time.Second
 	}
@@ -232,36 +258,46 @@ func Fetch(urlStr string, opts FetchOptions) (FetchResult, error) {
 		opts.MaxBytes = 5 * 1024 * 1024
 	}
 
-	text, err := fetcher.Fetch(urlStr, opts.Timeout, opts.MaxBytes)
+	res, err := fetcher.Fetch(ctx, urlStr, opts.Timeout, opts.MaxBytes)
 	if err != nil {
-		// Determine error type for sentinel error wrapping
-		errStr := err.Error()
-		if errors.Is(err, fetcher.ErrSSRFBlocked) {
-			return FetchResult{}, fmt.Errorf("tldt.Fetch: %w", err)
-		}
-		if errors.Is(err, fetcher.ErrRedirectLimit) {
-			return FetchResult{}, fmt.Errorf("tldt.Fetch: %w", err)
-		}
-		// Check for HTTP error (non-2xx status)
-		if strings.Contains(errStr, "HTTP ") && strings.Contains(errStr, "fetching") {
-			return FetchResult{}, fmt.Errorf("tldt.Fetch: %w: %v", ErrHTTPError, err)
-		}
-		// Check for non-HTML content type
-		if strings.Contains(errStr, "unsupported content type") {
-			return FetchResult{}, fmt.Errorf("tldt.Fetch: %w: %v", ErrNonHTML, err)
-		}
-		// Unknown error - still wrap with context
+		// The fetcher error already wraps a sentinel (re-exported above); add
+		// call-site context and let callers match with errors.Is.
 		return FetchResult{}, fmt.Errorf("tldt.Fetch: %w", err)
 	}
 
-	// On success, we don't have access to the actual HTTP response metadata
-	// since fetcher.Fetch only returns the text. Return with defaults.
-	// NOTE: If fetcher is extended to return metadata, update this to include it.
 	return FetchResult{
-		Text:        text,
-		StatusCode:  http.StatusOK, // Default since fetcher.Fetch doesn't expose this
-		ContentType: "text/html",     // Default since fetcher.Fetch doesn't expose this
-		FinalURL:    urlStr,          // Default since fetcher.Fetch doesn't expose this
+		Text:        res.Text,
+		StatusCode:  res.StatusCode,
+		ContentType: res.ContentType,
+		FinalURL:    res.FinalURL,
+	}, nil
+}
+
+// FetchRaw retrieves a URL with the same SSRF, redirect, and size protection as
+// Fetch but returns the raw response body and HTTP metadata — no content-type
+// gate, no text extraction. Use it to safely fetch JSON or other non-HTML
+// resources. The returned FetchResult.Text is empty; the body is the []byte.
+//
+// Errors are wrapped with context: use errors.Is() to check for sentinel errors
+// (ErrSSRFBlocked, ErrRedirectLimit, ErrHTTPError). ErrNonHTML never occurs.
+// ctx cancels the in-flight request and propagates to every dial.
+func FetchRaw(ctx context.Context, urlStr string, opts FetchOptions) ([]byte, FetchResult, error) {
+	if opts.Timeout == 0 {
+		opts.Timeout = 30 * time.Second
+	}
+	if opts.MaxBytes == 0 {
+		opts.MaxBytes = 5 * 1024 * 1024
+	}
+
+	body, res, err := fetcher.FetchRaw(ctx, urlStr, opts.Timeout, opts.MaxBytes)
+	if err != nil {
+		return nil, FetchResult{}, fmt.Errorf("tldt.FetchRaw: %w", err)
+	}
+
+	return body, FetchResult{
+		StatusCode:  res.StatusCode,
+		ContentType: res.ContentType,
+		FinalURL:    res.FinalURL,
 	}, nil
 }
 
@@ -390,20 +426,21 @@ func ReportInvisibles(text string) []InvisibleReport {
 // Pipeline runs the full sanitize -> detect -> summarize flow in one call.
 // This is the primary embedding use case for AI API middleware.
 func Pipeline(text string, opts PipelineOptions) (PipelineResult, error) {
-	var redactions int
+	var invisiblesRemoved, piiRedactions int
 	var piiFindings []PIIFinding
 
 	// Step 1: Unicode sanitize (if enabled)
 	if opts.Sanitize {
 		inv := ReportInvisibles(text)
-		redactions = len(inv)
+		invisiblesRemoved = len(inv)
 		text = SanitizeAll(text)
 	}
 
-	// Step 2: PII stage (between sanitize and inject-detect per LIB-04)
+	// Step 2: PII stage (between sanitize and inject-detect)
 	if opts.SanitizePII {
 		redacted, findings := detector.SanitizePII(text)
 		piiFindings = toPublicPIIFindings(findings)
+		piiRedactions = len(piiFindings)
 		text = redacted
 	} else if opts.DetectPII {
 		findings := detector.DetectPII(text)
@@ -424,12 +461,13 @@ func Pipeline(text string, opts PipelineOptions) (PipelineResult, error) {
 	}
 
 	return PipelineResult{
-		Summary:     result.Summary,
-		TokensIn:    result.TokensIn,
-		TokensOut:   result.TokensOut,
-		Reduction:   result.Reduction,
-		Warnings:    warnings,
-		Redactions:  redactions,
-		PIIFindings: piiFindings,
+		Summary:           result.Summary,
+		TokensIn:          result.TokensIn,
+		TokensOut:         result.TokensOut,
+		Reduction:         result.Reduction,
+		Warnings:          warnings,
+		InvisiblesRemoved: invisiblesRemoved,
+		PIIRedactions:     piiRedactions,
+		PIIFindings:       piiFindings,
 	}, nil
 }

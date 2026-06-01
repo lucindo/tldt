@@ -53,6 +53,55 @@ func TestSummarize_SilentCapOnShortInput(t *testing.T) {
 	}
 }
 
+func TestSummarize_ContractEdges(t *testing.T) {
+	// Empty input and non-positive n return nil, nil — matching the Summarizer
+	// contract honored by the other algorithms (R11).
+	for _, tc := range []struct {
+		name string
+		text string
+		n    int
+	}{
+		{"empty-input", "", 3},
+		{"whitespace-input", "   \n  ", 3},
+		{"zero-n", tenSentenceText, 0},
+		{"negative-n", tenSentenceText, -5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := (&Graph{}).Summarize(tc.text, tc.n)
+			if err != nil {
+				t.Fatalf("Summarize(%q, %d): unexpected error: %v", tc.text, tc.n, err)
+			}
+			if len(result) != 0 {
+				t.Errorf("Summarize(%q, %d) = %v, want empty", tc.text, tc.n, result)
+			}
+		})
+	}
+}
+
+// TestSummarize_SelectsCentralSentence checks that the graph algorithm picks the
+// unambiguously central sentence at n=1. The hub sentence shares one keyword with
+// every other sentence (sales, costs, profits, growth), so it has the highest
+// lexical overlap and must be the single sentence selected.
+func TestSummarize_SelectsCentralSentence(t *testing.T) {
+	const hub = "The report covers sales costs profits and growth in detail."
+	text := hub + " " +
+		"Sales increased sharply this quarter. " +
+		"Costs decreased after restructuring. " +
+		"Profits rose to a record high. " +
+		"Growth continued across all regions."
+
+	result, err := (&Graph{}).Summarize(text, 1)
+	if err != nil {
+		t.Fatalf("Summarize returned unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("Summarize(n=1) returned %d sentences, want 1", len(result))
+	}
+	if strings.TrimSpace(result[0]) != hub {
+		t.Errorf("Summarize selected %q, want the central hub sentence %q", result[0], hub)
+	}
+}
+
 func TestSummarize_ResultContainsRealSentences(t *testing.T) {
 	result, err := (&Graph{}).Summarize(threeSentenceText, 3)
 	if err != nil {

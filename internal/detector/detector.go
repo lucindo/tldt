@@ -16,6 +16,7 @@ import (
 	"encoding/base64"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -41,10 +42,9 @@ type Finding struct {
 
 // Report aggregates all findings from a full analysis pass.
 type Report struct {
-	Findings        []Finding
-	MaxScore        float64
-	Suspicious      bool  // MaxScore > DefaultDetectionThreshold
-	QuarantinedIdxs []int // sentence indices excluded by DetectOutliers with quarantine=true
+	Findings   []Finding
+	MaxScore   float64
+	Suspicious bool // MaxScore > DefaultDetectionThreshold
 }
 
 // DefaultDetectionThreshold is the score above which a report is marked Suspicious.
@@ -180,9 +180,7 @@ func DetectPatterns(text string) []Finding {
 		for _, loc := range matches {
 			start, end := loc[0], loc[1]
 			excerpt := text[start:end]
-			if len(excerpt) > 80 {
-				excerpt = excerpt[:80] + "…"
-			}
+			excerpt = truncateExcerpt(excerpt, 80, "…")
 			findings = append(findings, Finding{
 				Category: CategoryPattern,
 				Sentence: -1,
@@ -227,43 +225,51 @@ var hexEscapeRE = regexp.MustCompile(`(?:\\x[0-9a-fA-F]{2}){4,}`)
 // hexStringRE matches raw hex strings (32+ chars = 16+ bytes).
 var hexStringRE = regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`)
 
+// highEntropyBase64 returns the byte ranges of base64-shaped tokens in text that
+// decode cleanly and exceed the secret-material entropy threshold (random key
+// blobs, not prose). Shared by the encoding advisory (DetectEncoding) and PII
+// redaction (scanPII) so both agree on what counts as a likely-secret blob.
+func highEntropyBase64(text string) [][2]int {
+	var ranges [][2]int
+	for _, loc := range base64RE.FindAllStringIndex(text, -1) {
+		candidate := text[loc[0]:loc[1]]
+		// Re-pad to a multiple of 4 before decoding. Strip any captured padding
+		// first so a token that already ends in '=' is padded correctly rather
+		// than over-padded into an invalid string (which would skip a real secret).
+		body := strings.TrimRight(candidate, "=")
+		padded := body + strings.Repeat("=", (4-len(body)%4)%4)
+		if _, err := base64.StdEncoding.DecodeString(padded); err != nil {
+			continue
+		}
+		if shannonEntropy(candidate) > 4.5 {
+			ranges = append(ranges, [2]int{loc[0], loc[1]})
+		}
+	}
+	return ranges
+}
+
 // DetectEncoding scans text for base64 payloads, hex-encoded data, and
 // abnormally high control character density.
 func DetectEncoding(text string) []Finding {
 	var findings []Finding
 
-	// Base64 detection: match → validate length divisible by 4 → check entropy → try decode
-	for _, loc := range base64RE.FindAllStringIndex(text, -1) {
-		candidate := text[loc[0]:loc[1]]
-		// Base64 strings have length divisible by 4 (with padding) and high entropy
-		padded := candidate
-		for len(padded)%4 != 0 {
-			padded += "="
-		}
-		_, err := base64.StdEncoding.DecodeString(padded)
-		entropy := shannonEntropy(candidate)
-		if err == nil && entropy > 4.5 {
-			excerpt := candidate
-			if len(excerpt) > 80 {
-				excerpt = excerpt[:80] + "…"
-			}
-			findings = append(findings, Finding{
-				Category: CategoryEncoding,
-				Sentence: -1,
-				Offset:   loc[0],
-				Score:    0.75,
-				Pattern:  "base64",
-				Excerpt:  excerpt,
-			})
-		}
+	// Base64 detection: high-entropy, cleanly-decodable blobs.
+	for _, r := range highEntropyBase64(text) {
+		excerpt := truncateExcerpt(text[r[0]:r[1]], 80, "…")
+		findings = append(findings, Finding{
+			Category: CategoryEncoding,
+			Sentence: -1,
+			Offset:   r[0],
+			Score:    0.75,
+			Pattern:  "base64",
+			Excerpt:  excerpt,
+		})
 	}
 
 	// Hex escape detection: \x41\x42... sequences
 	for _, loc := range hexEscapeRE.FindAllStringIndex(text, -1) {
 		excerpt := text[loc[0]:loc[1]]
-		if len(excerpt) > 80 {
-			excerpt = excerpt[:80] + "…"
-		}
+		excerpt = truncateExcerpt(excerpt, 80, "…")
 		findings = append(findings, Finding{
 			Category: CategoryEncoding,
 			Sentence: -1,
@@ -283,9 +289,7 @@ func DetectEncoding(text string) []Finding {
 		// Use length to differentiate: UUIDs = 32–36 chars; injection = longer
 		if entropy > 3.5 && len(candidate) > 40 {
 			excerpt := candidate
-			if len(excerpt) > 80 {
-				excerpt = excerpt[:80] + "…"
-			}
+			excerpt = truncateExcerpt(excerpt, 80, "…")
 			findings = append(findings, Finding{
 				Category: CategoryEncoding,
 				Sentence: -1,
@@ -341,13 +345,13 @@ func DetectOutliers(sentences []string, simMatrix [][]float64, threshold float64
 	}
 
 	var findings []Finding
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if len(simMatrix[i]) != n {
 			continue
 		}
 		var sum float64
 		count := 0
-		for j := 0; j < n; j++ {
+		for j := range n {
 			if i != j {
 				sum += simMatrix[i][j]
 				count++
@@ -361,9 +365,7 @@ func DetectOutliers(sentences []string, simMatrix [][]float64, threshold float64
 
 		if outlierScore > threshold {
 			excerpt := sentences[i]
-			if len(excerpt) > 80 {
-				excerpt = excerpt[:80] + "…"
-			}
+			excerpt = truncateExcerpt(excerpt, 80, "…")
 			findings = append(findings, Finding{
 				Category: CategoryOutlier,
 				Sentence: i,
@@ -383,9 +385,14 @@ func DetectOutliers(sentences []string, simMatrix [][]float64, threshold float64
 const CategoryPII Category = "pii"
 
 // piiDef pairs a human-readable name with a compiled regex for PII pattern matching.
+// validate, when set, filters matches: a match is kept only if validate returns true
+// (used to apply a Luhn checksum to credit-card candidates). multiline patterns are
+// scanned against the full text rather than line-by-line, for secrets that span lines.
 type piiDef struct {
-	name string
-	re   *regexp.Regexp
+	name      string
+	re        *regexp.Regexp
+	validate  func(string) bool
+	multiline bool
 }
 
 // piiPatterns is the canonical set of PII and secret patterns.
@@ -397,8 +404,9 @@ var piiPatterns = []piiDef{
 		re:   regexp.MustCompile(`Bearer\s+[A-Za-z0-9._~+/\-]+=*`),
 	},
 	{
+		// Allow _ and - so modern OpenAI keys (sk-proj-…) match, not just legacy sk-.
 		name: "api-key",
-		re:   regexp.MustCompile(`\bsk-[A-Za-z0-9]{20,}\b`),
+		re:   regexp.MustCompile(`\bsk-[A-Za-z0-9_\-]{20,}\b`),
 	},
 	{
 		name: "api-key",
@@ -407,6 +415,26 @@ var piiPatterns = []piiDef{
 	{
 		name: "api-key",
 		re:   regexp.MustCompile(`\bAKIA[A-Za-z0-9]{16,}\b`),
+	},
+	// GitHub tokens — classic (ghp_/gho_/ghs_/ghu_/ghr_) and fine-grained (github_pat_)
+	{
+		name: "github-token",
+		re:   regexp.MustCompile(`\bgh[opsur]_[A-Za-z0-9]{36,}\b`),
+	},
+	{
+		name: "github-token",
+		re:   regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{50,}\b`),
+	},
+	// Slack tokens — distinct xox[abprs]-/xapp- prefix, very low false-positive surface.
+	{
+		name: "slack-token",
+		re:   regexp.MustCompile(`\b(?:xox[abprs]|xapp)-[A-Za-z0-9-]{10,}\b`),
+	},
+	// Private keys — PEM blocks span multiple lines (scanned against full text).
+	{
+		name:      "private-key",
+		re:        regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`),
+		multiline: true,
 	},
 	// JWT — three base64url segments separated by dots, minimum 10 chars per segment
 	{
@@ -418,11 +446,44 @@ var piiPatterns = []piiDef{
 		name: "email",
 		re:   regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`),
 	},
-	// Credit card numbers — 13-16 consecutive digits
+	// US Social Security numbers
 	{
-		name: "credit-card",
-		re:   regexp.MustCompile(`\b(?:\d[ \-]?){12,15}\d\b`),
+		name: "ssn",
+		re:   regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`),
 	},
+	// Credit card numbers — 13-16 digit runs that pass the Luhn checksum.
+	{
+		name:     "credit-card",
+		re:       regexp.MustCompile(`\b(?:\d[ \-]?){12,15}\d\b`),
+		validate: luhnValid,
+	},
+}
+
+// luhnValid reports whether the digits in s satisfy the Luhn checksum and form a
+// plausible card length (13-16 digits). Non-digit characters (spaces, hyphens)
+// are ignored. Used to reject digit runs that merely look card-shaped.
+func luhnValid(s string) bool {
+	var digits []int
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			digits = append(digits, int(r-'0'))
+		}
+	}
+	if len(digits) < 13 || len(digits) > 16 {
+		return false
+	}
+	sum := 0
+	parity := len(digits) % 2
+	for i, d := range digits {
+		if i%2 == parity {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+	}
+	return sum%10 == 0
 }
 
 // DetectPII scans text for PII and secret patterns.
@@ -433,13 +494,15 @@ func DetectPII(text string) []Finding {
 	lines := strings.Split(text, "\n")
 	for lineIdx, line := range lines {
 		for _, p := range piiPatterns {
+			if p.multiline {
+				continue // handled in the full-text pass below
+			}
 			matches := p.re.FindAllStringIndex(line, -1)
 			for _, loc := range matches {
 				start, end := loc[0], loc[1]
 				raw := line[start:end]
-				excerpt := raw
-				if len(excerpt) > 12 {
-					excerpt = excerpt[:12] + "..."
+				if p.validate != nil && !p.validate(raw) {
+					continue
 				}
 				findings = append(findings, Finding{
 					Category: CategoryPII,
@@ -447,29 +510,130 @@ func DetectPII(text string) []Finding {
 					Offset:   start,
 					Score:    0.95,
 					Pattern:  p.name,
-					Excerpt:  excerpt,
+					Excerpt:  excerptOf(raw),
 				})
 			}
+		}
+	}
+	// Multiline secrets (PEM blocks) span lines, so scan the full text and derive
+	// the line number from the match offset.
+	for _, p := range piiPatterns {
+		if !p.multiline {
+			continue
+		}
+		for _, loc := range p.re.FindAllStringIndex(text, -1) {
+			raw := text[loc[0]:loc[1]]
+			if p.validate != nil && !p.validate(raw) {
+				continue
+			}
+			findings = append(findings, Finding{
+				Category: CategoryPII,
+				Sentence: strings.Count(text[:loc[0]], "\n") + 1,
+				Offset:   loc[0] - strings.LastIndex(text[:loc[0]], "\n") - 1,
+				Score:    0.95,
+				Pattern:  p.name,
+				Excerpt:  excerptOf(raw),
+			})
 		}
 	}
 	return findings
 }
 
+// truncateExcerpt returns s limited to maxRunes runes, appending ellipsis when
+// truncated. It cuts on a rune boundary so the result is always valid UTF-8.
+func truncateExcerpt(s string, maxRunes int, ellipsis string) string {
+	count := 0
+	for i := range s {
+		if count == maxRunes {
+			return s[:i] + ellipsis
+		}
+		count++
+	}
+	return s
+}
+
+// excerptOf returns a short, display-safe excerpt of a matched value: the first
+// 12 runes followed by "..." when longer.
+func excerptOf(raw string) string {
+	return truncateExcerpt(raw, 12, "...")
+}
+
+// piiSpan is a matched PII region as an absolute byte range into the source text.
+type piiSpan struct {
+	start, end int
+	name       string
+	raw        string
+}
+
+// scanPII finds every PII match across all patterns as absolute byte spans,
+// applying each pattern's validator. Patterns are scanned over the full text;
+// none anchor or use newline separators, so this matches the per-line scan in
+// DetectPII while also covering multi-line secrets (PEM blocks).
+func scanPII(text string) []piiSpan {
+	var spans []piiSpan
+	for _, p := range piiPatterns {
+		for _, loc := range p.re.FindAllStringIndex(text, -1) {
+			raw := text[loc[0]:loc[1]]
+			if p.validate != nil && !p.validate(raw) {
+				continue
+			}
+			spans = append(spans, piiSpan{loc[0], loc[1], p.name, raw})
+		}
+	}
+	// High-entropy base64 secrets (AWS secret keys, random API tokens, opaque
+	// blobs) have no fixed prefix, so redact the spans the encoding detector
+	// already flags — otherwise --sanitize-pii would leak them. Overlap
+	// resolution in SanitizePII lets a more-specific pattern (jwt, api-key, …)
+	// win when both match the same region.
+	for _, r := range highEntropyBase64(text) {
+		spans = append(spans, piiSpan{r[0], r[1], "secret", text[r[0]:r[1]]})
+	}
+	return spans
+}
+
 // SanitizePII replaces PII matches in text with [REDACTED:<type>] placeholders.
-// Returns the redacted string and a []Finding slice in a single pass.
-// The original text is never stored or logged — only the redacted form is returned.
-// Replacement format: [REDACTED:email], [REDACTED:api-key], [REDACTED:jwt], [REDACTED:credit-card].
+// It scans once, resolves overlapping matches (earliest start wins; longest at
+// the same start), then redacts in a single pass — so the returned findings
+// correspond exactly to the redactions applied. The original text is never
+// stored or logged; only the redacted form is returned.
 func SanitizePII(text string) (string, []Finding) {
-	findings := DetectPII(text)
-	if len(findings) == 0 {
+	spans := scanPII(text)
+	if len(spans) == 0 {
 		return text, nil
 	}
-	redacted := text
-	for _, p := range piiPatterns {
-		replacement := "[REDACTED:" + p.name + "]"
-		redacted = p.re.ReplaceAllString(redacted, replacement)
+	// Earliest start first; longer span first on ties.
+	sort.SliceStable(spans, func(i, j int) bool {
+		if spans[i].start != spans[j].start {
+			return spans[i].start < spans[j].start
+		}
+		return spans[i].end > spans[j].end
+	})
+
+	var (
+		redacted strings.Builder
+		findings []Finding
+		prev     int
+	)
+	for _, s := range spans {
+		if s.start < prev {
+			continue // overlaps an already-redacted span — drop it
+		}
+		redacted.WriteString(text[prev:s.start])
+		redacted.WriteString("[REDACTED:")
+		redacted.WriteString(s.name)
+		redacted.WriteString("]")
+		prev = s.end
+		findings = append(findings, Finding{
+			Category: CategoryPII,
+			Sentence: strings.Count(text[:s.start], "\n") + 1,
+			Offset:   s.start - strings.LastIndex(text[:s.start], "\n") - 1,
+			Score:    0.95,
+			Pattern:  s.name,
+			Excerpt:  excerptOf(s.raw),
+		})
 	}
-	return redacted, findings
+	redacted.WriteString(text[prev:])
+	return redacted.String(), findings
 }
 
 // --- Combined analysis ---

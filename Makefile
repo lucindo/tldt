@@ -63,9 +63,10 @@ clean:
 	rm -f $(BINARY)
 	rm -f $(DOCS_DIR)/tldt.wasm $(DOCS_DIR)/wasm_exec.js
 
-## lint: run go vet
+## lint: run go vet and golangci-lint
 lint:
 	go vet ./...
+	golangci-lint run ./...
 
 ## run: build and run with stdin (usage example)
 run: build

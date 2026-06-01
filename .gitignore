@@ -6,3 +6,9 @@ dist/
 
 # Example binaries
 examples/*/*-example
+examples/*/tldt-example-*
+
+# AI
+CLAUDE.md
+AGENTS.md
+.audit-baseline/

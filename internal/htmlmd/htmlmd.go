@@ -9,9 +9,9 @@
 //   - HTML emails
 //
 // The conversion pipeline:
-//   1. Parse HTML and extract article content (readability algorithm)
-//   2. Convert to clean Markdown (removing most HTML tags)
-//   3. Normalize whitespace and trim
+//  1. Parse HTML and extract article content (readability algorithm)
+//  2. Convert to clean Markdown (removing most HTML tags)
+//  3. Normalize whitespace and trim
 package htmlmd
 
 import (
@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/go-shiori/go-readability"
@@ -76,7 +77,12 @@ func Convert(r io.Reader, opts Options) (string, error) {
 		// Use readability to extract main article content
 		article, err := readability.FromReader(bytes.NewReader(htmlBytes), nil)
 		if err != nil {
-			// Fallback: use raw HTML if readability fails
+			// Intentional graceful degradation: readability legitimately fails on
+			// input that isn't a single article (HTML fragments, listing/index
+			// pages, malformed markup). Rather than fail the whole conversion, fall
+			// back to converting the raw HTML — htmlBytes is already non-empty
+			// (checked above), so this still yields best-effort Markdown. The error
+			// is deliberately tolerated, not an oversight.
 			textContent = string(htmlBytes)
 		} else {
 			// Build HTML from extracted content
@@ -108,7 +114,12 @@ func Convert(r io.Reader, opts Options) (string, error) {
 
 	// Apply length limit if specified
 	if opts.MaxLength > 0 && len(markdown) > opts.MaxLength {
-		markdown = markdown[:opts.MaxLength]
+		// Back the cut up to a rune boundary so we never split a multibyte rune.
+		cut := opts.MaxLength
+		for cut > 0 && !utf8.RuneStart(markdown[cut]) {
+			cut--
+		}
+		markdown = markdown[:cut]
 		// Try to end at a word boundary
 		if idx := strings.LastIndex(markdown, " "); idx > opts.MaxLength/2 {
 			markdown = markdown[:idx] + "..."

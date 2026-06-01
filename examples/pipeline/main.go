@@ -81,8 +81,8 @@ for testing fonts, keyboards, and other text-related tools.`
 		}
 	}
 
-	if result.Redactions > 0 {
-		fmt.Printf("\n=== Redactions: %d ===\n", result.Redactions)
+	if result.InvisiblesRemoved > 0 || result.PIIRedactions > 0 {
+		fmt.Printf("\n=== Redactions: %d invisible, %d PII ===\n", result.InvisiblesRemoved, result.PIIRedactions)
 	}
 
 	fmt.Println("\n=== Summary ===")

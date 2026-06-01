@@ -42,7 +42,7 @@ var privateUseRanges = &unicode.RangeTable{
 		{Lo: 0xE000, Hi: 0xF8FF, Stride: 1}, // BMP Private Use Area
 	},
 	R32: []unicode.Range32{
-		{Lo: 0xF0000, Hi: 0xFFFFD, Stride: 1},  // Supplementary PUA-A
+		{Lo: 0xF0000, Hi: 0xFFFFD, Stride: 1},   // Supplementary PUA-A
 		{Lo: 0x100000, Hi: 0x10FFFD, Stride: 1}, // Supplementary PUA-B
 	},
 }

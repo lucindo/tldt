@@ -18,8 +18,8 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -31,13 +31,13 @@ import (
 
 // OpenAPI represents a simplified OpenAPI/Swagger document structure
 type OpenAPI struct {
-	Swagger     string                 `json:"swagger"`
-	OpenAPI     string                 `json:"openapi"`
-	Info        Info                   `json:"info"`
-	Host        string                 `json:"host"`
-	BasePath    string                 `json:"basePath"`
-	Paths       map[string]interface{} `json:"paths"`
-	Definitions map[string]interface{} `json:"definitions"`
+	Swagger     string         `json:"swagger"`
+	OpenAPI     string         `json:"openapi"`
+	Info        Info           `json:"info"`
+	Host        string         `json:"host"`
+	BasePath    string         `json:"basePath"`
+	Paths       map[string]any `json:"paths"`
+	Definitions map[string]any `json:"definitions"`
 }
 
 type Info struct {
@@ -60,32 +60,29 @@ func main() {
 	fmt.Printf("Fetching OpenAPI documentation from: %s\n", *url)
 	fmt.Println()
 
-	// Fetch the OpenAPI document
-	fetchResult, err := tldt.Fetch(*url, tldt.FetchOptions{
+	// Fetch the OpenAPI document. tldt.Fetch extracts article text from HTML and
+	// rejects non-HTML content, so OpenAPI/Swagger JSON is retrieved with
+	// tldt.FetchRaw — the same SSRF/redirect/size-hardened transport, minus the
+	// HTML gate and extraction.
+	body, meta, err := tldt.FetchRaw(context.Background(), *url, tldt.FetchOptions{
 		Timeout:  *timeout,
-		MaxBytes: 10 * 1024 * 1024, // 10MB max
+		MaxBytes: 10 * 1024 * 1024,
 	})
 	if err != nil {
-		if errors.Is(err, tldt.ErrSSRFBlocked) {
-			log.Fatalf("SSRF protection triggered: %v", err)
-		}
-		if errors.Is(err, tldt.ErrRedirectLimit) {
-			log.Fatalf("Too many redirects: %v", err)
-		}
 		log.Fatalf("Failed to fetch URL: %v", err)
 	}
 
-	fmt.Printf("Fetched: %d bytes\n", len(fetchResult.Text))
-	fmt.Printf("Content-Type: %s\n", fetchResult.ContentType)
-	fmt.Printf("Status: %d\n", fetchResult.StatusCode)
-	if fetchResult.FinalURL != *url {
-		fmt.Printf("Final URL: %s\n", fetchResult.FinalURL)
+	fmt.Printf("Fetched: %d bytes\n", len(body))
+	fmt.Printf("Content-Type: %s\n", meta.ContentType)
+	fmt.Printf("Status: %d\n", meta.StatusCode)
+	if meta.FinalURL != *url {
+		fmt.Printf("Final URL: %s\n", meta.FinalURL)
 	}
 	fmt.Println()
 
 	// Parse as OpenAPI to extract metadata
 	var apiDoc OpenAPI
-	if err := json.Unmarshal([]byte(fetchResult.Text), &apiDoc); err == nil {
+	if err := json.Unmarshal(body, &apiDoc); err == nil {
 		fmt.Printf("API Title: %s\n", apiDoc.Info.Title)
 		fmt.Printf("Version: %s\n", apiDoc.Info.Version)
 		if apiDoc.Host != "" {
@@ -100,7 +97,7 @@ func main() {
 
 	// Process through tldt pipeline
 	fmt.Println("Processing through tldt pipeline...")
-	result, err := tldt.Pipeline(fetchResult.Text, tldt.PipelineOptions{
+	result, err := tldt.Pipeline(string(body), tldt.PipelineOptions{
 		Sanitize:    *sanitize,
 		DetectPII:   *detectPII,
 		SanitizePII: *sanitizePII,
@@ -119,30 +116,34 @@ func main() {
 	if *outputJSON {
 		// Output structured JSON
 		output := struct {
-			APITitle      string              `json:"api_title,omitempty"`
-			APIVersion    string              `json:"api_version,omitempty"`
-			OriginalSize  int                 `json:"original_size_bytes"`
-			SummaryTokens int                 `json:"summary_tokens"`
-			Reduction     int                 `json:"reduction_percent"`
-			Warnings      []string            `json:"warnings,omitempty"`
-			PIIFindings   []tldt.PIIFinding   `json:"pii_findings,omitempty"`
-			Redactions    int                 `json:"redactions"`
-			Summary       string              `json:"summary"`
+			APITitle          string            `json:"api_title,omitempty"`
+			APIVersion        string            `json:"api_version,omitempty"`
+			OriginalSize      int               `json:"original_size_bytes"`
+			SummaryTokens     int               `json:"summary_tokens"`
+			Reduction         int               `json:"reduction_percent"`
+			Warnings          []string          `json:"warnings,omitempty"`
+			PIIFindings       []tldt.PIIFinding `json:"pii_findings,omitempty"`
+			InvisiblesRemoved int               `json:"invisibles_removed"`
+			PIIRedactions     int               `json:"pii_redactions"`
+			Summary           string            `json:"summary"`
 		}{
-			APITitle:      apiDoc.Info.Title,
-			APIVersion:    apiDoc.Info.Version,
-			OriginalSize:  len(fetchResult.Text),
-			SummaryTokens: result.TokensOut,
-			Reduction:     result.Reduction,
-			Warnings:      result.Warnings,
-			PIIFindings:   result.PIIFindings,
-			Redactions:    result.Redactions,
-			Summary:       result.Summary,
+			APITitle:          apiDoc.Info.Title,
+			APIVersion:        apiDoc.Info.Version,
+			OriginalSize:      len(body),
+			SummaryTokens:     result.TokensOut,
+			Reduction:         result.Reduction,
+			Warnings:          result.Warnings,
+			PIIFindings:       result.PIIFindings,
+			InvisiblesRemoved: result.InvisiblesRemoved,
+			PIIRedactions:     result.PIIRedactions,
+			Summary:           result.Summary,
 		}
 
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		enc.Encode(output)
+		if err := enc.Encode(output); err != nil {
+			log.Fatalf("encoding JSON output: %v", err)
+		}
 	} else {
 		// Human-readable output
 		fmt.Printf("Original: ~%d tokens\n", result.TokensIn)
@@ -165,8 +166,8 @@ func main() {
 			fmt.Println()
 		}
 
-		if result.Redactions > 0 {
-			fmt.Printf("=== Redactions: %d ===\n", result.Redactions)
+		if result.InvisiblesRemoved > 0 || result.PIIRedactions > 0 {
+			fmt.Printf("=== Redactions: %d invisible, %d PII ===\n", result.InvisiblesRemoved, result.PIIRedactions)
 			fmt.Println()
 		}
 

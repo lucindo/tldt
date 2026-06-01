@@ -127,10 +127,10 @@ func TestStripInvisible_PreservesAllPrintableASCII(t *testing.T) {
 func TestStripInvisible_PreservesUnicodeLetters(t *testing.T) {
 	// Legitimate non-ASCII: emoji, CJK, accented chars
 	cases := []string{
-		"café",        // U+00E9 LATIN SMALL LETTER E WITH ACUTE
-		"日本語",        // CJK
-		"مرحبا",       // Arabic (right-to-left but not a control char)
-		"Ελληνικά",    // Greek
+		"café",     // U+00E9 LATIN SMALL LETTER E WITH ACUTE
+		"日本語",      // CJK
+		"مرحبا",    // Arabic (right-to-left but not a control char)
+		"Ελληνικά", // Greek
 	}
 	for _, s := range cases {
 		got := StripInvisible(s)
