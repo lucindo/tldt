@@ -49,13 +49,18 @@ type Explainer interface {
 	SummarizeExplain(text string, n int) ([]string, *ExplainInfo, error)
 }
 
-// preview truncates s to maxLen characters for display.
+// preview truncates s to maxLen runes for display, cutting on a rune boundary
+// so the result is always valid UTF-8.
 func preview(s string, maxLen int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= maxLen {
-		return s
+	count := 0
+	for i := range s {
+		if count == maxLen {
+			return s[:i] + "…"
+		}
+		count++
 	}
-	return s[:maxLen] + "…"
+	return s
 }
 
 // PrintExplain writes a human-readable explain report to a string.

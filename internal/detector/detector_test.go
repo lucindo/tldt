@@ -3,6 +3,7 @@ package detector
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // --- DetectPatterns tests ---
@@ -691,6 +692,23 @@ func TestDetectPII_CreditCardLuhn(t *testing.T) {
 	redacted, _ := SanitizePII(bad)
 	if !strings.Contains(redacted, "4111111111111112") {
 		t.Errorf("SanitizePII: Luhn-invalid number should remain, got: %q", redacted)
+	}
+}
+
+func TestTruncateExcerpt_RuneSafe(t *testing.T) {
+	// 90 multibyte runes (each 3 bytes) — a byte-slice cut at 80 would split a
+	// rune and yield invalid UTF-8. The rune-aware helper must not.
+	s := strings.Repeat("界", 90)
+	got := truncateExcerpt(s, 80, "…")
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateExcerpt produced invalid UTF-8: %q", got)
+	}
+	if r := utf8.RuneCountInString(strings.TrimSuffix(got, "…")); r != 80 {
+		t.Errorf("truncateExcerpt: want 80 runes before ellipsis, got %d", r)
+	}
+	// ASCII shorter than the limit is returned unchanged (no ellipsis).
+	if got := truncateExcerpt("hello", 80, "…"); got != "hello" {
+		t.Errorf("truncateExcerpt(short) = %q, want %q", got, "hello")
 	}
 }
 

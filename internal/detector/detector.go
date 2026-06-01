@@ -180,9 +180,7 @@ func DetectPatterns(text string) []Finding {
 		for _, loc := range matches {
 			start, end := loc[0], loc[1]
 			excerpt := text[start:end]
-			if len(excerpt) > 80 {
-				excerpt = excerpt[:80] + "…"
-			}
+			excerpt = truncateExcerpt(excerpt, 80, "…")
 			findings = append(findings, Finding{
 				Category: CategoryPattern,
 				Sentence: -1,
@@ -241,9 +239,7 @@ func DetectEncoding(text string) []Finding {
 		entropy := shannonEntropy(candidate)
 		if err == nil && entropy > 4.5 {
 			excerpt := candidate
-			if len(excerpt) > 80 {
-				excerpt = excerpt[:80] + "…"
-			}
+			excerpt = truncateExcerpt(excerpt, 80, "…")
 			findings = append(findings, Finding{
 				Category: CategoryEncoding,
 				Sentence: -1,
@@ -258,9 +254,7 @@ func DetectEncoding(text string) []Finding {
 	// Hex escape detection: \x41\x42... sequences
 	for _, loc := range hexEscapeRE.FindAllStringIndex(text, -1) {
 		excerpt := text[loc[0]:loc[1]]
-		if len(excerpt) > 80 {
-			excerpt = excerpt[:80] + "…"
-		}
+		excerpt = truncateExcerpt(excerpt, 80, "…")
 		findings = append(findings, Finding{
 			Category: CategoryEncoding,
 			Sentence: -1,
@@ -280,9 +274,7 @@ func DetectEncoding(text string) []Finding {
 		// Use length to differentiate: UUIDs = 32–36 chars; injection = longer
 		if entropy > 3.5 && len(candidate) > 40 {
 			excerpt := candidate
-			if len(excerpt) > 80 {
-				excerpt = excerpt[:80] + "…"
-			}
+			excerpt = truncateExcerpt(excerpt, 80, "…")
 			findings = append(findings, Finding{
 				Category: CategoryEncoding,
 				Sentence: -1,
@@ -358,9 +350,7 @@ func DetectOutliers(sentences []string, simMatrix [][]float64, threshold float64
 
 		if outlierScore > threshold {
 			excerpt := sentences[i]
-			if len(excerpt) > 80 {
-				excerpt = excerpt[:80] + "…"
-			}
+			excerpt = truncateExcerpt(excerpt, 80, "…")
 			findings = append(findings, Finding{
 				Category: CategoryOutlier,
 				Sentence: i,
@@ -529,13 +519,23 @@ func DetectPII(text string) []Finding {
 	return findings
 }
 
-// excerptOf returns a short, display-safe excerpt of a matched value: the first
-// 12 characters followed by "..." when longer.
-func excerptOf(raw string) string {
-	if len(raw) > 12 {
-		return raw[:12] + "..."
+// truncateExcerpt returns s limited to maxRunes runes, appending ellipsis when
+// truncated. It cuts on a rune boundary so the result is always valid UTF-8.
+func truncateExcerpt(s string, maxRunes int, ellipsis string) string {
+	count := 0
+	for i := range s {
+		if count == maxRunes {
+			return s[:i] + ellipsis
+		}
+		count++
 	}
-	return raw
+	return s
+}
+
+// excerptOf returns a short, display-safe excerpt of a matched value: the first
+// 12 runes followed by "..." when longer.
+func excerptOf(raw string) string {
+	return truncateExcerpt(raw, 12, "...")
 }
 
 // piiSpan is a matched PII region as an absolute byte range into the source text.

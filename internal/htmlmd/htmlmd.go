@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/go-shiori/go-readability"
@@ -108,7 +109,12 @@ func Convert(r io.Reader, opts Options) (string, error) {
 
 	// Apply length limit if specified
 	if opts.MaxLength > 0 && len(markdown) > opts.MaxLength {
-		markdown = markdown[:opts.MaxLength]
+		// Back the cut up to a rune boundary so we never split a multibyte rune.
+		cut := opts.MaxLength
+		for cut > 0 && !utf8.RuneStart(markdown[cut]) {
+			cut--
+		}
+		markdown = markdown[:cut]
 		// Try to end at a word boundary
 		if idx := strings.LastIndex(markdown, " "); idx > opts.MaxLength/2 {
 			markdown = markdown[:idx] + "..."
