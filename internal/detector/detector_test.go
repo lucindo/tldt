@@ -683,6 +683,63 @@ func TestDetectPII_ModernSecrets(t *testing.T) {
 	}
 }
 
+func TestDetectPII_SlackToken(t *testing.T) {
+	// Built from parts so the literal token never appears contiguously in source
+	// (keeps secret scanners from flagging an obviously-fake test fixture).
+	slackToken := "xox" + "b-2222222222-3333333333333-aBcDeFgHiJkLmNoPqRsTuVwX"
+	text := "slack " + slackToken + " end"
+	found := false
+	for _, f := range DetectPII(text) {
+		if f.Pattern == "slack-token" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("DetectPII: want slack-token finding, got none")
+	}
+	redacted, _ := SanitizePII(text)
+	if strings.Contains(redacted, slackToken) {
+		t.Errorf("SanitizePII: Slack token still present: %q", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED:slack-token]") {
+		t.Errorf("SanitizePII: expected [REDACTED:slack-token], got %q", redacted)
+	}
+}
+
+func TestSanitizePII_RedactsHighEntropyBase64(t *testing.T) {
+	// A prefix-less high-entropy blob matches no fixed pattern; --sanitize-pii
+	// must still redact it via the shared entropy path. (Synthetic random-looking
+	// base64, not a real secret shape, so scanners leave it alone.)
+	secret := "k7Jx2Qp9Lw4Vn8Rb1Tz6Yh0Dg5Sf3Kc8Mq2Ej7Pa9Wd"
+	text := "blob: " + secret + " done"
+	// Sanity: the encoding detector flags it (shared highEntropyBase64 source).
+	flagged := false
+	for _, f := range DetectEncoding(text) {
+		if f.Pattern == "base64" {
+			flagged = true
+		}
+	}
+	if !flagged {
+		t.Fatalf("DetectEncoding: expected base64 finding for %q (entropy gate)", secret)
+	}
+	redacted, findings := SanitizePII(text)
+	if strings.Contains(redacted, secret) {
+		t.Errorf("SanitizePII: high-entropy secret still present: %q", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED:secret]") {
+		t.Errorf("SanitizePII: expected [REDACTED:secret], got %q", redacted)
+	}
+	gotSecret := false
+	for _, f := range findings {
+		if f.Pattern == "secret" {
+			gotSecret = true
+		}
+	}
+	if !gotSecret {
+		t.Errorf("SanitizePII: expected a 'secret' finding, got %v", findings)
+	}
+}
+
 func TestDetectPII_PrivateKeyBlock(t *testing.T) {
 	pem := "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAabcdefSAMPLEFAKEKEYBODY\n-----END RSA PRIVATE KEY-----"
 	text := "config:\n" + pem + "\ndone"

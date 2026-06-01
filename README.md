@@ -74,8 +74,8 @@ tldt -f article.txt --format markdown
 | `--sanitize` | off | Strip invisible Unicode and NFKC-normalize before summarizing |
 | `--detect-injection` | off | Report prompt injection patterns and encoding anomalies to stderr |
 | `--injection-threshold` | `0.99` | Outlier score [0,1] above which sentences are flagged |
-| `--detect-pii` | off | Report PII/secrets (email, API keys, JWTs, credit cards) to stderr |
-| `--sanitize-pii` | off | Redact PII in input with `[REDACTED:<type>]` before summarizing |
+| `--detect-pii` | off | Report PII/secrets (emails, API keys, tokens, private keys, JWTs, SSNs, credit cards) to stderr |
+| `--sanitize-pii` | off | Redact PII/secrets (detected patterns plus high-entropy key material) with `[REDACTED:<type>]` before summarizing |
 | `--from-html` | off | Convert HTML input to Markdown before summarizing |
 | `--print-threshold` | off | Print configured hook token threshold to stdout and exit |
 | `--install-skill` | off | Install tldt skill and UserPromptSubmit hook |

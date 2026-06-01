@@ -225,30 +225,42 @@ var hexEscapeRE = regexp.MustCompile(`(?:\\x[0-9a-fA-F]{2}){4,}`)
 // hexStringRE matches raw hex strings (32+ chars = 16+ bytes).
 var hexStringRE = regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`)
 
+// highEntropyBase64 returns the byte ranges of base64-shaped tokens in text that
+// decode cleanly and exceed the secret-material entropy threshold (random key
+// blobs, not prose). Shared by the encoding advisory (DetectEncoding) and PII
+// redaction (scanPII) so both agree on what counts as a likely-secret blob.
+func highEntropyBase64(text string) [][2]int {
+	var ranges [][2]int
+	for _, loc := range base64RE.FindAllStringIndex(text, -1) {
+		candidate := text[loc[0]:loc[1]]
+		// Base64 strings have length divisible by 4 (with padding) and high entropy.
+		padded := candidate + strings.Repeat("=", (4-len(candidate)%4)%4)
+		if _, err := base64.StdEncoding.DecodeString(padded); err != nil {
+			continue
+		}
+		if shannonEntropy(candidate) > 4.5 {
+			ranges = append(ranges, [2]int{loc[0], loc[1]})
+		}
+	}
+	return ranges
+}
+
 // DetectEncoding scans text for base64 payloads, hex-encoded data, and
 // abnormally high control character density.
 func DetectEncoding(text string) []Finding {
 	var findings []Finding
 
-	// Base64 detection: match → validate length divisible by 4 → check entropy → try decode
-	for _, loc := range base64RE.FindAllStringIndex(text, -1) {
-		candidate := text[loc[0]:loc[1]]
-		// Base64 strings have length divisible by 4 (with padding) and high entropy
-		padded := candidate + strings.Repeat("=", (4-len(candidate)%4)%4)
-		_, err := base64.StdEncoding.DecodeString(padded)
-		entropy := shannonEntropy(candidate)
-		if err == nil && entropy > 4.5 {
-			excerpt := candidate
-			excerpt = truncateExcerpt(excerpt, 80, "…")
-			findings = append(findings, Finding{
-				Category: CategoryEncoding,
-				Sentence: -1,
-				Offset:   loc[0],
-				Score:    0.75,
-				Pattern:  "base64",
-				Excerpt:  excerpt,
-			})
-		}
+	// Base64 detection: high-entropy, cleanly-decodable blobs.
+	for _, r := range highEntropyBase64(text) {
+		excerpt := truncateExcerpt(text[r[0]:r[1]], 80, "…")
+		findings = append(findings, Finding{
+			Category: CategoryEncoding,
+			Sentence: -1,
+			Offset:   r[0],
+			Score:    0.75,
+			Pattern:  "base64",
+			Excerpt:  excerpt,
+		})
 	}
 
 	// Hex escape detection: \x41\x42... sequences
@@ -410,6 +422,11 @@ var piiPatterns = []piiDef{
 		name: "github-token",
 		re:   regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{50,}\b`),
 	},
+	// Slack tokens — distinct xox[abprs]-/xapp- prefix, very low false-positive surface.
+	{
+		name: "slack-token",
+		re:   regexp.MustCompile(`\b(?:xox[abprs]|xapp)-[A-Za-z0-9-]{10,}\b`),
+	},
 	// Private keys — PEM blocks span multiple lines (scanned against full text).
 	{
 		name:      "private-key",
@@ -559,6 +576,14 @@ func scanPII(text string) []piiSpan {
 			}
 			spans = append(spans, piiSpan{loc[0], loc[1], p.name, raw})
 		}
+	}
+	// High-entropy base64 secrets (AWS secret keys, random API tokens, opaque
+	// blobs) have no fixed prefix, so redact the spans the encoding detector
+	// already flags — otherwise --sanitize-pii would leak them. Overlap
+	// resolution in SanitizePII lets a more-specific pattern (jwt, api-key, …)
+	// win when both match the same region.
+	for _, r := range highEntropyBase64(text) {
+		spans = append(spans, piiSpan{r[0], r[1], "secret", text[r[0]:r[1]]})
 	}
 	return spans
 }

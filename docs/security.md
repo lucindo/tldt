@@ -21,9 +21,9 @@ injection-detect: WARNING — input flagged as suspicious
 
 ## LLM02 — Sensitive Information Disclosure
 
-**Threat:** Source text may contain PII, API keys, JWTs, or credit card numbers. If these survive into a summary, they leak into the AI model's context — and potentially into logs, caches, or downstream responses.
+**Threat:** Source text may contain PII, API keys, tokens, JWTs, SSNs, or credit card numbers. If these survive into a summary, they leak into the AI model's context — and potentially into logs, caches, or downstream responses.
 
-**Mitigation (Phase 9):** `--detect-pii` scans for email addresses, API key prefixes (Bearer, sk-, AIza, AKIA), JWTs, and credit card sequences. `--sanitize-pii` redacts matches with `[REDACTED:<type>]` placeholders before summarization. Detection reports to stderr; redaction count reported.
+**Mitigation (Phase 9):** `--detect-pii` scans for email addresses, API key prefixes (Bearer, sk-, AIza, AKIA), GitHub/Slack tokens, PEM private keys, JWTs, SSNs, and Luhn-valid credit cards. `--sanitize-pii` redacts those matches — plus high-entropy base64 key material (e.g. prefix-less secret keys) — with `[REDACTED:<type>]` placeholders before summarization. Detection reports to stderr; redaction count reported.
 
 **Example (Phase 9):**
 
