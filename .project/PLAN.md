@@ -4,11 +4,11 @@ Source: `.project/SPEC.md` — Full Code Audit (Behavior-Preserving)
 
 ## Now
 
-**State** — Audit's main work is shipped: 9 commits on `cleanup` (`a6e4591`→`852f6b0`), all behavior-preserving A-groups + approved behavior-changing R1/R2/R4. Tree is green (lint 0, `test -race` all pass, golden I/O identical, API identical, `go.mod` unchanged). Two "Ending cleanup" tasks remain in the roadmap and are **not yet started**.
+**State** — ALL audit recommendations applied. 16 follow-up commits on `cleanup` (`163cd34`→`47712ec`): comment-ID strip, R15, R3, R6, R5, R7(A), R8, R9, R10, R11, R12, R13, R14, C1, C2/C3, plus doc updates. Combined with the earlier 9 commits, the whole audit (A-groups, R1–R15, C1–C3) is shipped. Tree green on every commit: lint 0, `test -race` all pass, 15/15 golden byte-identical, `pkg/tldt` API stable. Nothing from sections B/C remains open — see AUDIT.md "Section B + C — ALL APPLIED".
 
-**Next** — Strip leaked planning IDs from code comments (GSD `CFG-/SUM-/D-/INP-/SEC-/LIB-/Pitfall N/Phase N` + the audit's own `R1/R2/R4` in new test comments) across ~9 non-test + 2 test files; keep the explanation, drop the reference; commit as one behavior-preserving group, verify build+lint+golden. Then run the final `/ds-*` pass (deslop, code-quality, go-review, bug-review, security-review) over the diff.
+**Next** — Run the gopls/`go fix` pre-pass: `go fix ./...` across all modules, then resolve every gopls hint (`gopls check -severity=hint $(find . -name "*.go")`) — accumulated hints are rangeint modernization + `interface{}`→`any` (installer `PatchSettingsJSON`, openapi-client struct). Apply behavior-preserving fixes, verify build+lint+`test -race`+golden+API, commit as its own group. THEN the final `/ds-*` review pass — sequential, one command at a time, **deslop last** (order in Roadmap).
 
-**Open questions** — (1) Should the comment cleanup also drop the `R1/R2/R4` audit IDs (current plan: yes)? (2) Fix the 3 examples' pre-existing stale `go.mod` via `go mod tidy` (R15), or leave as flagged? Awaiting user "go".
+**Open questions** — None blocking. Maintainer chose: R7 option A, R6 incl. SSN+Luhn, R13 full legacy removal, C1–C3 done now. The gopls pre-pass + final reviews are the only remaining roadmap items.
 
 ## Roadmap
 
