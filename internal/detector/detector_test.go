@@ -694,6 +694,23 @@ func TestDetectPII_CreditCardLuhn(t *testing.T) {
 	}
 }
 
+func TestSanitizePII_OverlapConsistent(t *testing.T) {
+	// "Bearer sk-…" matches both the Bearer and the sk- api-key patterns, which
+	// overlap. Span-based redaction must collapse them into one redaction, and the
+	// returned findings must match the redactions (no double-count, no leftover).
+	input := "auth: Bearer sk-abcdefghij1234567890"
+	redacted, findings := SanitizePII(input)
+	if strings.Contains(redacted, "sk-abcdefghij") {
+		t.Errorf("SanitizePII: secret still present after redaction: %q", redacted)
+	}
+	if n := strings.Count(redacted, "[REDACTED:"); n != len(findings) {
+		t.Errorf("SanitizePII: %d redactions but %d findings — must match", n, len(findings))
+	}
+	if n := strings.Count(redacted, "[REDACTED:"); n != 1 {
+		t.Errorf("SanitizePII: want 1 merged redaction for overlapping match, got %d: %q", n, redacted)
+	}
+}
+
 func TestSanitizePII_Redaction(t *testing.T) {
 	input := "Contact alice@example.com for help"
 	redacted, findings := SanitizePII(input)

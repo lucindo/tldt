@@ -16,6 +16,7 @@ import (
 	"encoding/base64"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -537,32 +538,74 @@ func excerptOf(raw string) string {
 	return raw
 }
 
+// piiSpan is a matched PII region as an absolute byte range into the source text.
+type piiSpan struct {
+	start, end int
+	name       string
+	raw        string
+}
+
+// scanPII finds every PII match across all patterns as absolute byte spans,
+// applying each pattern's validator. Patterns are scanned over the full text;
+// none anchor or use newline separators, so this matches the per-line scan in
+// DetectPII while also covering multi-line secrets (PEM blocks).
+func scanPII(text string) []piiSpan {
+	var spans []piiSpan
+	for _, p := range piiPatterns {
+		for _, loc := range p.re.FindAllStringIndex(text, -1) {
+			raw := text[loc[0]:loc[1]]
+			if p.validate != nil && !p.validate(raw) {
+				continue
+			}
+			spans = append(spans, piiSpan{loc[0], loc[1], p.name, raw})
+		}
+	}
+	return spans
+}
+
 // SanitizePII replaces PII matches in text with [REDACTED:<type>] placeholders.
-// Returns the redacted string and a []Finding slice in a single pass.
-// The original text is never stored or logged — only the redacted form is returned.
-// Replacement format: [REDACTED:email], [REDACTED:api-key], [REDACTED:jwt], [REDACTED:credit-card].
+// It scans once, resolves overlapping matches (earliest start wins; longest at
+// the same start), then redacts in a single pass — so the returned findings
+// correspond exactly to the redactions applied. The original text is never
+// stored or logged; only the redacted form is returned.
 func SanitizePII(text string) (string, []Finding) {
-	findings := DetectPII(text)
-	if len(findings) == 0 {
+	spans := scanPII(text)
+	if len(spans) == 0 {
 		return text, nil
 	}
-	redacted := text
-	for _, p := range piiPatterns {
-		replacement := "[REDACTED:" + p.name + "]"
-		if p.validate != nil {
-			// Redact only matches that pass validation, keeping redactions
-			// consistent with the findings reported by DetectPII.
-			redacted = p.re.ReplaceAllStringFunc(redacted, func(m string) string {
-				if p.validate(m) {
-					return replacement
-				}
-				return m
-			})
-			continue
+	// Earliest start first; longer span first on ties.
+	sort.SliceStable(spans, func(i, j int) bool {
+		if spans[i].start != spans[j].start {
+			return spans[i].start < spans[j].start
 		}
-		redacted = p.re.ReplaceAllString(redacted, replacement)
+		return spans[i].end > spans[j].end
+	})
+
+	var (
+		redacted strings.Builder
+		findings []Finding
+		prev     int
+	)
+	for _, s := range spans {
+		if s.start < prev {
+			continue // overlaps an already-redacted span — drop it
+		}
+		redacted.WriteString(text[prev:s.start])
+		redacted.WriteString("[REDACTED:")
+		redacted.WriteString(s.name)
+		redacted.WriteString("]")
+		prev = s.end
+		findings = append(findings, Finding{
+			Category: CategoryPII,
+			Sentence: strings.Count(text[:s.start], "\n") + 1,
+			Offset:   s.start - strings.LastIndex(text[:s.start], "\n") - 1,
+			Score:    0.95,
+			Pattern:  s.name,
+			Excerpt:  excerptOf(s.raw),
+		})
 	}
-	return redacted, findings
+	redacted.WriteString(text[prev:])
+	return redacted.String(), findings
 }
 
 // --- Combined analysis ---
