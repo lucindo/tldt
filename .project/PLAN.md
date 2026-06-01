@@ -6,9 +6,9 @@ Source: `.project/SPEC.md` — Full Code Audit (Behavior-Preserving)
 
 **State** — ALL audit recommendations applied. 16 follow-up commits on `cleanup` (`163cd34`→`47712ec`): comment-ID strip, R15, R3, R6, R5, R7(A), R8, R9, R10, R11, R12, R13, R14, C1, C2/C3, plus doc updates. Combined with the earlier 9 commits, the whole audit (A-groups, R1–R15, C1–C3) is shipped. Tree green on every commit: lint 0, `test -race` all pass, 15/15 golden byte-identical, `pkg/tldt` API stable. Nothing from sections B/C remains open — see AUDIT.md "Section B + C — ALL APPLIED".
 
-**Next** — AUDIT COMPLETE. Pre-pass (`18f2f32`), stray-binary untrack (`fa54cc0`), and the full 6-review final pass (`e10f3b9`, 4 behavior-preserving fixes) all shipped. No roadmap items remain. Decision for maintainer: act on the recommend-only residuals in AUDIT.md "Final review pass" — chiefly **S1 (High): `--sanitize-pii` redaction coverage is narrower than the README promise** (Slack/AWS-secret/base64 secrets pass through). Everything else is minor/optional. Branch `cleanup` ready to merge to `main` once S1 is decided.
+**Next** — AUDIT COMPLETE + two maintainer-requested follow-ups shipped. Pre-pass (`18f2f32`), stray-binary untrack (`fa54cc0`), 6-review final pass (`e10f3b9`), **S1 redaction coverage** (`2b8b3f6`: Slack pattern + high-entropy base64 fed into scanPII, docs synced), and **FetchRaw** (`93053d7`: hardened JSON/non-HTML fetch primitive; closes the openapi example's SSRF gap). No roadmap items remain. Branch `cleanup` ready to merge to `main`. Remaining recommend-only residuals (G1/G2/G7–G9/Q1/Q4/B1/B2/T3) are minor/optional — see AUDIT.md "Final review pass" table.
 
-**Open questions** — Only S1 (redaction-coverage vs doc-promise) needs a product call: expand patterns, feed DetectEncoding spans into scanPII, or narrow the doc. Maintainer prior choices: R7 option A, R6 incl. SSN+Luhn, R13 full legacy removal, C1–C3 done.
+**Open questions** — None blocking. Optional residuals tabled in AUDIT.md for a future pass. Maintainer prior choices: R7 option A, R6 incl. SSN+Luhn, R13 full legacy removal, C1–C3, S1 option 2+Slack, FetchRaw additive API.
 
 ## Roadmap
 
