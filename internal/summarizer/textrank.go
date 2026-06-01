@@ -139,78 +139,16 @@ func (t *TextRank) SummarizeExplain(text string, n int) ([]string, *ExplainInfo,
 	}
 	info.SelectedN = n
 
-	words := make([][]string, len(sentences))
-	for i, s := range sentences {
-		words[i] = tokenizeWords(s)
-	}
+	c := textrankCompute(sentences)
+	info.SimilarityPairs = c.simPairs
+	info.SimilarityNonZero = c.simNonZero
+	info.SimilarityMax = c.simMax
+	info.SimilarityMean = c.simMean
+	info.Iterations = c.iters
+	info.Converged = c.converged
+	info.Scores = buildSentenceScores(sentences, c.scores, n)
 
-	size := len(sentences)
-	matrix := make([][]float64, size)
-	for i := range matrix {
-		matrix[i] = make([]float64, size)
-		for j := range matrix[i] {
-			if i != j {
-				matrix[i][j] = wordOverlapSim(words[i], words[j])
-			}
-		}
-	}
-
-	// Collect similarity stats before row-normalizing
-	totalPairs := size * (size - 1)
-	info.SimilarityPairs = totalPairs
-	for i := range matrix {
-		for j := range matrix[i] {
-			if i == j {
-				continue
-			}
-			v := matrix[i][j]
-			if v > 0 {
-				info.SimilarityNonZero++
-				if v > info.SimilarityMax {
-					info.SimilarityMax = v
-				}
-				info.SimilarityMean += v
-			}
-		}
-	}
-	if info.SimilarityNonZero > 0 {
-		info.SimilarityMean /= float64(info.SimilarityNonZero)
-	}
-
-	trRowNormalize(matrix)
-	scores, iters, converged := powerIterateDamped(matrix, textRankDamping, textRankEpsilon, textRankMaxIter)
-	info.Iterations = iters
-	info.Converged = converged
-
-	result := trSelectTopN(scores, n, sentences)
-
-	type ranked struct {
-		idx   int
-		score float64
-	}
-	rankedList := make([]ranked, len(scores))
-	for i, s := range scores {
-		rankedList[i] = ranked{i, s}
-	}
-	sort.SliceStable(rankedList, func(a, b int) bool {
-		return rankedList[a].score > rankedList[b].score
-	})
-	rankOf := make([]int, len(scores))
-	for r, rv := range rankedList {
-		rankOf[rv.idx] = r + 1
-	}
-	info.Scores = make([]SentenceScore, len(sentences))
-	for i, s := range sentences {
-		info.Scores[i] = SentenceScore{
-			Index:    i,
-			Score:    scores[i],
-			Selected: rankOf[i] <= n, // by rank/index, not text — duplicate-safe
-			Rank:     rankOf[i],
-			Preview:  s,
-		}
-	}
-
-	return result, info, nil
+	return trSelectTopN(c.scores, n, sentences), info, nil
 }
 
 // Summarize implements the Summarizer interface using TextRank.
@@ -224,26 +162,57 @@ func (t *TextRank) Summarize(text string, n int) ([]string, error) {
 	if n > len(sentences) {
 		n = len(sentences)
 	}
+	c := textrankCompute(sentences)
+	return trSelectTopN(c.scores, n, sentences), nil
+}
 
-	// Tokenize each sentence into words
+// textrankComputed carries the result of one TextRank scoring pass plus the
+// word-overlap similarity statistics --explain reports (accumulated while the
+// matrix is built, so non-explain callers pay no extra pass).
+type textrankComputed struct {
+	scores     []float64
+	iters      int
+	converged  bool
+	simPairs   int
+	simNonZero int
+	simMax     float64
+	simMean    float64
+}
+
+// textrankCompute runs the TextRank pipeline (word-overlap similarity → row
+// normalization → damped power iteration) over sentences, which must be
+// non-empty.
+func textrankCompute(sentences []string) textrankComputed {
 	words := make([][]string, len(sentences))
 	for i, s := range sentences {
 		words[i] = tokenizeWords(s)
 	}
 
-	// Build n*n word overlap similarity matrix
 	size := len(sentences)
+	c := textrankComputed{simPairs: size * (size - 1)}
 	matrix := make([][]float64, size)
 	for i := range matrix {
 		matrix[i] = make([]float64, size)
 		for j := range matrix[i] {
-			if i != j {
-				matrix[i][j] = wordOverlapSim(words[i], words[j])
+			if i == j {
+				continue
+			}
+			v := wordOverlapSim(words[i], words[j])
+			matrix[i][j] = v
+			if v > 0 {
+				c.simNonZero++
+				if v > c.simMax {
+					c.simMax = v
+				}
+				c.simMean += v
 			}
 		}
 	}
+	if c.simNonZero > 0 {
+		c.simMean /= float64(c.simNonZero)
+	}
 
 	trRowNormalize(matrix)
-	scores, _, _ := powerIterateDamped(matrix, textRankDamping, textRankEpsilon, textRankMaxIter)
-	return trSelectTopN(scores, n, sentences), nil
+	c.scores, c.iters, c.converged = powerIterateDamped(matrix, textRankDamping, textRankEpsilon, textRankMaxIter)
+	return c
 }

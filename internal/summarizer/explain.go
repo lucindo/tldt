@@ -2,6 +2,7 @@ package summarizer
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -47,6 +48,38 @@ type SentenceScore struct {
 // return per-run diagnostics alongside the summary.
 type Explainer interface {
 	SummarizeExplain(text string, n int) ([]string, *ExplainInfo, error)
+}
+
+// buildSentenceScores ranks sentences by score (stable, descending) and returns
+// per-sentence diagnostics in document order. Selection is by rank/index — the
+// top n ranks are marked Selected — so duplicate sentence text is handled safely.
+func buildSentenceScores(sentences []string, scores []float64, n int) []SentenceScore {
+	type ranked struct {
+		idx   int
+		score float64
+	}
+	rankedList := make([]ranked, len(scores))
+	for i, s := range scores {
+		rankedList[i] = ranked{i, s}
+	}
+	sort.SliceStable(rankedList, func(a, b int) bool {
+		return rankedList[a].score > rankedList[b].score
+	})
+	rankOf := make([]int, len(scores))
+	for r, rv := range rankedList {
+		rankOf[rv.idx] = r + 1
+	}
+	out := make([]SentenceScore, len(sentences))
+	for i, s := range sentences {
+		out[i] = SentenceScore{
+			Index:    i,
+			Score:    scores[i],
+			Selected: rankOf[i] <= n,
+			Rank:     rankOf[i],
+			Preview:  s,
+		}
+	}
+	return out
 }
 
 // preview truncates s to maxLen runes for display, cutting on a rune boundary

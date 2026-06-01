@@ -40,51 +40,81 @@ func (l *LexRank) SummarizeWithMatrix(text string, n int) ([]string, [][]float64
 	if n > len(sentences) {
 		n = len(sentences)
 	}
+	c := lexrankCompute(sentences, true)
+	return selectTopN(c.scores, n, sentences), c.rawMatrix, nil
+}
 
-	// Tokenize each sentence into normalized words
+// lexrankComputed carries the result of one LexRank scoring pass plus the
+// intermediates different callers need (the raw similarity matrix for outlier
+// detection; vocab/IDF and convergence stats for --explain).
+type lexrankComputed struct {
+	scores    []float64
+	rawMatrix [][]float64 // nil unless keepRawMatrix was set
+	vocabSize int
+	idfMin    float64
+	idfMax    float64
+	iters     int
+	converged bool
+}
+
+// lexrankCompute runs the LexRank pipeline (IDF-cosine similarity → row
+// normalization → power iteration) over sentences. keepRawMatrix snapshots the
+// pre-normalization similarity matrix; callers that don't need it pay no extra
+// allocation. sentences must be non-empty.
+func lexrankCompute(sentences []string, keepRawMatrix bool) lexrankComputed {
 	wordLists := make([][]string, len(sentences))
 	for i, s := range sentences {
 		wordLists[i] = tokenizeWords(s)
 	}
 
-	// Build sorted vocabulary and IDF weights
 	vocab, idf := buildVocabAndIDF(wordLists)
+	c := lexrankComputed{vocabSize: len(vocab)}
+	if len(idf) > 0 {
+		c.idfMin, c.idfMax = idf[0], idf[0]
+		for _, v := range idf {
+			if v < c.idfMin {
+				c.idfMin = v
+			}
+			if v > c.idfMax {
+				c.idfMax = v
+			}
+		}
+	}
 
-	// Build word → index map for TF vector construction
 	wordIdx := make(map[string]int, len(vocab))
 	for i, w := range vocab {
 		wordIdx[w] = i
 	}
-
-	// Build TF-IDF vectors for each sentence
 	vocabSize := len(vocab)
 	vectors := make([][]float64, len(sentences))
 	for i, words := range wordLists {
 		vectors[i] = buildTFVector(words, wordIdx, vocabSize)
 	}
 
-	// Build n×n cosine similarity matrix (continuous — no threshold).
-	// Snapshot raw values before row normalization for outlier detection.
+	// Build n×n cosine similarity matrix (continuous — no threshold), optionally
+	// snapshotting raw values before row normalization for outlier detection.
 	n2 := len(sentences)
-	rawMatrix := make([][]float64, n2)
 	matrix := make([][]float64, n2)
+	if keepRawMatrix {
+		c.rawMatrix = make([][]float64, n2)
+	}
 	for i := range matrix {
-		rawMatrix[i] = make([]float64, n2)
 		matrix[i] = make([]float64, n2)
+		if keepRawMatrix {
+			c.rawMatrix[i] = make([]float64, n2)
+		}
 		for j := range matrix[i] {
 			v := idfCosine(vectors[i], vectors[j], idf)
-			rawMatrix[i][j] = v
 			matrix[i][j] = v
+			if keepRawMatrix {
+				c.rawMatrix[i][j] = v
+			}
 		}
 	}
 
-	// Row-normalize to stochastic matrix (mutates matrix, not rawMatrix)
 	rowNormalize(matrix)
-
-	// Power iteration to find stationary distribution (eigenvector centrality)
-	scores, _, _ := powerIterate(matrix, lexrankEpsilon, lexrankMaxIter)
-
-	return selectTopN(scores, n, sentences), rawMatrix, nil
+	c.scores, c.iters, c.converged = powerIterate(matrix, lexrankEpsilon, lexrankMaxIter)
+	return c
 }
 
 // SummarizeExplain implements Explainer. Same algorithm as Summarize but
@@ -100,80 +130,14 @@ func (l *LexRank) SummarizeExplain(text string, n int) ([]string, *ExplainInfo, 
 	}
 	info.SelectedN = n
 
-	wordLists := make([][]string, len(sentences))
-	for i, s := range sentences {
-		wordLists[i] = tokenizeWords(s)
-	}
+	c := lexrankCompute(sentences, false)
+	info.VocabSize = c.vocabSize
+	info.IDFMin, info.IDFMax = c.idfMin, c.idfMax
+	info.Iterations = c.iters
+	info.Converged = c.converged
+	info.Scores = buildSentenceScores(sentences, c.scores, n)
 
-	vocab, idf := buildVocabAndIDF(wordLists)
-	info.VocabSize = len(vocab)
-	if len(idf) > 0 {
-		info.IDFMin, info.IDFMax = idf[0], idf[0]
-		for _, v := range idf {
-			if v < info.IDFMin {
-				info.IDFMin = v
-			}
-			if v > info.IDFMax {
-				info.IDFMax = v
-			}
-		}
-	}
-
-	wordIdx := make(map[string]int, len(vocab))
-	for i, w := range vocab {
-		wordIdx[w] = i
-	}
-	vocabSize := len(vocab)
-	vectors := make([][]float64, len(sentences))
-	for i, words := range wordLists {
-		vectors[i] = buildTFVector(words, wordIdx, vocabSize)
-	}
-
-	n2 := len(sentences)
-	matrix := make([][]float64, n2)
-	for i := range matrix {
-		matrix[i] = make([]float64, n2)
-		for j := range matrix[i] {
-			matrix[i][j] = idfCosine(vectors[i], vectors[j], idf)
-		}
-	}
-	rowNormalize(matrix)
-
-	scores, iters, converged := powerIterate(matrix, lexrankEpsilon, lexrankMaxIter)
-	info.Iterations = iters
-	info.Converged = converged
-
-	result := selectTopN(scores, n, sentences)
-
-	// Build per-sentence score list with rank and selection flag.
-	type ranked struct {
-		idx   int
-		score float64
-	}
-	rankedList := make([]ranked, len(scores))
-	for i, s := range scores {
-		rankedList[i] = ranked{i, s}
-	}
-	// Sort by score descending to assign rank
-	sort.SliceStable(rankedList, func(a, b int) bool {
-		return rankedList[a].score > rankedList[b].score
-	})
-	rankOf := make([]int, len(scores))
-	for r, rv := range rankedList {
-		rankOf[rv.idx] = r + 1
-	}
-	info.Scores = make([]SentenceScore, len(sentences))
-	for i, s := range sentences {
-		info.Scores[i] = SentenceScore{
-			Index:    i,
-			Score:    scores[i],
-			Selected: rankOf[i] <= n, // by rank/index, not text — duplicate-safe
-			Rank:     rankOf[i],
-			Preview:  s,
-		}
-	}
-
-	return result, info, nil
+	return selectTopN(c.scores, n, sentences), info, nil
 }
 
 // buildVocabAndIDF computes the sorted vocabulary and parallel IDF weights
