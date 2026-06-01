@@ -12,10 +12,11 @@ Source: `.project/SPEC.md` — Full Code Audit (Behavior-Preserving)
 - `8754267` — **FetchRaw**: hardened JSON/non-HTML fetch primitive (shared `doHardenedRequest`); `Fetch` output byte-identical; openapi example switched onto it → gains SSRF protection.
 - `8e2a44e` — stripped leaked GSD lingo ("Phase 9") from `docs/security.md` + `docs/index.html`.
 - **Thread-3 hardening** (`d9ca4e7`, `71654ad`, `3c72976`): installer fail-loudly (G7/G8/G9); `context.Context` on `Fetch`/`FetchRaw` (G2) + non-positive `maxBytes`/`timeout` preconditions (G1); `PipelineResult.Redactions` split; `--sanitize-pii` over-redaction trade-off documented. CLI golden 15/15 byte-identical; lint 0; tests added.
+- **Remaining residuals** (`2a37094`, `ab92e47`): B1 (`=`-terminated high-entropy redaction miss + test), B2 (empty-DNS dial guard), Q1 (`resolveSettings` extract), Q4 (uniform fetch sentinels). Nothing deferred.
 
-**Next** — Curate history (drop checkpoint/doc-churn commits, keep the fix commits) and merge via a real merge (not squash); regenerate/drop the commit-hash tables at merge. Deferred residuals (Q1/Q4/B1/B2) are minor/optional — see AUDIT.md residuals table.
+**Next** — Nothing outstanding. Everything is addressed in this PR; it merges in full.
 
-**Open questions** — None blocking. Maintainer prior choices: R7 option A, R6 incl. SSN+Luhn, R13 full legacy removal, C1–C3, S1 option 2+Slack, thread-3 API changes (ctx + Redactions split) accepted since module unreleased, curated-merge over squash, `.project/` kept tracked.
+**Open questions** — None blocking. Maintainer prior choices: R7 option A, R6 incl. SSN+Luhn, R13 full legacy removal, C1–C3, S1 option 2+Slack, thread-3 API changes (ctx + Redactions split) accepted since module unreleased, `.project/` kept tracked.
 
 ## Roadmap
 

@@ -52,9 +52,9 @@ Judgement calls: R7 took option A (complete the feature) but landed byte-identic
 Four behavior-preserving fixes applied (`e10f3b9`), verified build+lint+`test -race`+15/15 golden+API-parity:
 - `lexrank.go` drop redundant `vocabSize` local · `detector_test.go` exclusive-threshold boundary test (guards `>`→`>=`) · `tldt_test.go` `TestDetect_OutlierFinding` now compares strict vs permissive thresholds (was passing zero-value default, proving nothing) · `openapi-client/main.go` handle discarded `enc.Encode` error.
 
-**Recommend-only residuals — most now resolved in the thread-3 hardening pass; the rest are the maintainer's call.**
+**Recommend-only residuals — all resolved in this PR (thread-3 hardening + follow-up).**
 
-The thread-3 follow-up applied the boundary/fail-loudly residuals and made two intentional `pkg/tldt` API changes (the module is unreleased, so no compatibility break). CLI golden output stayed 15/15 byte-identical (the `--url` path is excluded from the golden set). Commit hashes below predate the planned curated rebase and will be regenerated/dropped at merge.
+The thread-3 follow-up applied every boundary/fail-loudly/style residual and made two intentional `pkg/tldt` API changes (the module is unreleased, so no compatibility break). CLI golden output stayed 15/15 byte-identical (the `--url` path is excluded from the golden set). Nothing is deferred; one design note (internal IP in SSRF errors) is kept for library consumers.
 
 | # | Sev | Location | Status / Recommendation |
 |---|-----|----------|--------------------------|
@@ -64,11 +64,11 @@ The thread-3 follow-up applied the boundary/fail-loudly residuals and made two i
 | G7–G9 | **RESOLVED** (`d9ca4e7`) | `installer.go` | Fail-loudly fixes: explicit `--target` `MkdirAll` failure now errors instead of a false success (G7); `PatchSettingsJSON` refuses a malformed `hooks`/`UserPromptSubmit` rather than clobbering the user's `settings.json` (G8); `hookCmd` asserted absolute (G9). Tests added. |
 | Redactions split | **RESOLVED** (`71654ad`) | `pkg/tldt` `PipelineResult` | The single `Redactions` field counted invisible-unicode strips only, reporting `0` while `--sanitize-pii` redacted secrets. Split into `InvisiblesRemoved` + `PIIRedactions`. **API change** — examples/doc updated; the test that pinned the old semantic was flipped. |
 | — | **RESOLVED** (`8754267`) | `examples/openapi-client` SSRF gap | The example's hand-rolled `http.Client` (from R14) had no SSRF hardening. Added `FetchRaw` — a hardened fetch primitive (shared `doHardenedRequest`: SSRF dial-time validation + redirect/byte/timeout caps, no content-type gate) — and switched the example onto `tldt.FetchRaw`. `Fetch` output stays byte-identical. |
-| B1 | **deferred** | `detector.go:237` | base64 re-padding drops a token ending in `=`. Was advisory-only (stderr), but now that `highEntropyBase64()` is shared with redaction it is **also a possible redaction miss** (an `=`-terminated secret whose captured length isn't a multiple of 4 escapes `[REDACTED:secret]`). Real secrets are usually correctly padded; add a regression test before relying on `--sanitize-pii` for such tokens. |
-| B2 | **deferred** | `fetcher.go:71` `safeDialContext` | Returns `(nil,nil)` if `lookupHost` yields empty+nil (test-seam-only; real resolver never does). Optional defensive guard. |
-| Q1 | **deferred** | `main.go` | Effective-config resolution (~42 lines) could extract `resolveSettings()`. Optional (C2/C3 already decomposed the heavy logic). |
-| Q4 | **deferred** | `tldt.go:108–112` | Sentinel re-export style split (2 aliased, 2 redefined+remapped). Functionally correct (`errors.Is` works) — style only. |
-| — | note | `fetcher.go` `FinalURL`/SSRF errors | Surface resolved internal IP/host in errors — harmless in single-user CLI; doc note for library consumers embedding `Fetch` in a multi-tenant service. |
+| B1 | **RESOLVED** (`2a37094`) | `detector.go` `highEntropyBase64` | base64 re-padding dropped a token ending in `=`. Since the helper is shared with redaction this was a **redaction miss** (an `=`-terminated secret could escape `[REDACTED:secret]`), not just a stderr quirk. Fixed by stripping captured padding before re-padding; regression test added. |
+| B2 | **RESOLVED** (`2a37094`) | `fetcher.go` `safeDialContext` | Returns a clear error when `lookupHost` resolves zero addresses, instead of `(nil,nil)` which a caller would deref. |
+| Q1 | **RESOLVED** (`ab92e47`) | `cmd/tldt/main.go` | Extracted the ~40-line config→level→flags resolution into `resolveSettings()`. Behavior-preserving; golden output unchanged. |
+| Q4 | **RESOLVED** (`ab92e47`) | `pkg/tldt` sentinels | All four sentinels now alias the `fetcher` package's, so the set is uniform and the `Fetch`/`FetchRaw` error mapping collapses to a single wrap (`errors.Is` still matches through the chain). |
+| — | note (by design) | `fetcher.go` `FinalURL`/SSRF errors | SSRF errors surface the resolved internal IP/host for CLI debuggability — intended for the single-user CLI. Library consumers embedding `Fetch` in a multi-tenant service should scrub error detail before returning it to end users. |
 
 Refuted (not slop / not bugs, don't re-flag): `keepRawMatrix` flag (bivalued, avoids n² alloc) · ensemble one-line wrappers · `_ = flag.Bool("detect-injection")` (intentional CLI-compat) · example unwrapped errors · `DetectPII` vs `SanitizePII` count divergence on nested matches (by design, documented).
 
