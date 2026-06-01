@@ -233,8 +233,11 @@ func highEntropyBase64(text string) [][2]int {
 	var ranges [][2]int
 	for _, loc := range base64RE.FindAllStringIndex(text, -1) {
 		candidate := text[loc[0]:loc[1]]
-		// Base64 strings have length divisible by 4 (with padding) and high entropy.
-		padded := candidate + strings.Repeat("=", (4-len(candidate)%4)%4)
+		// Re-pad to a multiple of 4 before decoding. Strip any captured padding
+		// first so a token that already ends in '=' is padded correctly rather
+		// than over-padded into an invalid string (which would skip a real secret).
+		body := strings.TrimRight(candidate, "=")
+		padded := body + strings.Repeat("=", (4-len(body)%4)%4)
 		if _, err := base64.StdEncoding.DecodeString(padded); err != nil {
 			continue
 		}

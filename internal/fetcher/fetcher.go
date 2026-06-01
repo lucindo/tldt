@@ -63,6 +63,9 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 	if err != nil {
 		return nil, fmt.Errorf("resolving host %q: %w", host, err)
 	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("no addresses resolved for host %q", host)
+	}
 	if err := blockIP(host, addrs); err != nil {
 		return nil, err
 	}

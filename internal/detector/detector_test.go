@@ -740,6 +740,22 @@ func TestSanitizePII_RedactsHighEntropyBase64(t *testing.T) {
 	}
 }
 
+// TestSanitizePII_RedactsPaddedHighEntropyToken guards the B1 fix: a high-entropy
+// body captured with a trailing '=' must still be redacted. The old re-pad logic
+// appended padding to the already-'='-terminated token, producing an invalid
+// string that failed to decode and silently skipped the secret.
+func TestSanitizePII_RedactsPaddedHighEntropyToken(t *testing.T) {
+	body := "k7Jx2Qp9Lw4Vn8Rb1Tz6Yh0D" // 24 base64 chars → decodes with no padding
+	text := "key: " + body + "= rest"  // stray '=' is captured by the base64 regex
+	redacted, _ := SanitizePII(text)
+	if strings.Contains(redacted, body) {
+		t.Errorf("SanitizePII: padded high-entropy token not redacted: %q", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED:secret]") {
+		t.Errorf("SanitizePII: expected [REDACTED:secret], got %q", redacted)
+	}
+}
+
 func TestDetectPII_PrivateKeyBlock(t *testing.T) {
 	pem := "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAabcdefSAMPLEFAKEKEYBODY\n-----END RSA PRIVATE KEY-----"
 	text := "config:\n" + pem + "\ndone"
