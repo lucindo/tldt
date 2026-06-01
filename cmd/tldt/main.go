@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -500,7 +501,7 @@ func groupIntoParagraphs(sentences []string, n int) string {
 func resolveInputBytes(args []string, filePath string, urlStr string) ([]byte, error) {
 	// --url branch: highest priority — most explicit input source
 	if urlStr != "" {
-		fresult, err := tldt.Fetch(urlStr, tldt.FetchOptions{
+		fresult, err := tldt.Fetch(context.Background(), urlStr, tldt.FetchOptions{
 			Timeout:  30 * time.Second,
 			MaxBytes: 5 << 20, // 5MB cap
 		})

@@ -139,10 +139,14 @@ type Result struct {
 // rawURL and returns the live 2xx response together with the parsed request URL
 // (for relative-link resolution). SSRF validation runs at dial time via
 // safeDialContext for the initial request and every redirect hop, closing the
-// DNS-rebinding TOCTOU; CheckRedirect enforces the 5-hop cap. The caller owns
-// resp.Body and must close it. Only http and https schemes are accepted; a
-// non-2xx status returns ErrHTTPError (with the body already closed).
-func doHardenedRequest(rawURL string, timeout time.Duration) (*http.Response, *url.URL, error) {
+// DNS-rebinding TOCTOU; CheckRedirect enforces the 5-hop cap. ctx cancels the
+// in-flight request and propagates to every dial. The caller owns resp.Body and
+// must close it. Only http and https schemes are accepted; a non-2xx status
+// returns ErrHTTPError (with the body already closed).
+func doHardenedRequest(ctx context.Context, rawURL string, timeout time.Duration) (*http.Response, *url.URL, error) {
+	if timeout <= 0 {
+		return nil, nil, fmt.Errorf("timeout must be positive, got %v", timeout)
+	}
 	// Validate scheme — block file://, ftp://, etc.
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -163,7 +167,7 @@ func doHardenedRequest(rawURL string, timeout time.Duration) (*http.Response, *u
 		},
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building request for %q: %w", rawURL, err)
 	}
@@ -181,14 +185,18 @@ func doHardenedRequest(rawURL string, timeout time.Duration) (*http.Response, *u
 }
 
 // Fetch fetches rawURL and returns the main article text plus response metadata.
-// timeout applies to the entire HTTP round-trip (http.Client level).
-// maxBytes caps the response body read to prevent memory exhaustion.
+// ctx cancels the in-flight request. timeout applies to the entire HTTP
+// round-trip (http.Client level). maxBytes caps the response body read to
+// prevent memory exhaustion; it must be positive.
 //
 // Only http and https schemes are accepted. Non-2xx status codes (ErrHTTPError)
 // and non-HTML content types (ErrNonHTML) are returned as errors. HTTP redirects
 // are followed with SSRF + 5-hop guard.
-func Fetch(rawURL string, timeout time.Duration, maxBytes int64) (Result, error) {
-	resp, u, err := doHardenedRequest(rawURL, timeout)
+func Fetch(ctx context.Context, rawURL string, timeout time.Duration, maxBytes int64) (Result, error) {
+	if maxBytes <= 0 {
+		return Result{}, fmt.Errorf("maxBytes must be positive, got %d", maxBytes)
+	}
+	resp, u, err := doHardenedRequest(ctx, rawURL, timeout)
 	if err != nil {
 		return Result{}, err
 	}
@@ -228,10 +236,14 @@ func Fetch(rawURL string, timeout time.Duration, maxBytes int64) (Result, error)
 // FetchRaw fetches rawURL with the same SSRF, redirect, and size hardening as
 // Fetch but applies no content-type gate and no text extraction: it returns the
 // raw response body (capped at maxBytes) plus response metadata. Use it for JSON
-// or other non-HTML resources. The returned Result.Text is empty; the body is
-// the []byte return value.
-func FetchRaw(rawURL string, timeout time.Duration, maxBytes int64) ([]byte, Result, error) {
-	resp, _, err := doHardenedRequest(rawURL, timeout)
+// or other non-HTML resources. ctx cancels the in-flight request; maxBytes must
+// be positive. The returned Result.Text is empty; the body is the []byte return
+// value.
+func FetchRaw(ctx context.Context, rawURL string, timeout time.Duration, maxBytes int64) ([]byte, Result, error) {
+	if maxBytes <= 0 {
+		return nil, Result{}, fmt.Errorf("maxBytes must be positive, got %d", maxBytes)
+	}
+	resp, _, err := doHardenedRequest(ctx, rawURL, timeout)
 	if err != nil {
 		return nil, Result{}, err
 	}

@@ -33,7 +33,7 @@
 //
 //	// Access findings
 //	fmt.Printf("Summary: %s\n", result.Summary)
-//	fmt.Printf("Redactions: %d\n", result.Redactions)
+//	fmt.Printf("Redactions: %d invisible, %d PII\n", result.InvisiblesRemoved, result.PIIRedactions)
 //	fmt.Printf("Token reduction: %d%%\n", result.Reduction)
 //
 //	for _, finding := range result.PIIFindings {
@@ -45,7 +45,7 @@
 //
 // Fetch and summarize a webpage:
 //
-//	result, err := tldt.Fetch("https://example.com/article", tldt.FetchOptions{
+//	result, err := tldt.Fetch(ctx, "https://example.com/article", tldt.FetchOptions{
 //	    Timeout: 30 * time.Second,
 //	})
 //	if err != nil {

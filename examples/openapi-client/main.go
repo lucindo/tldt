@@ -18,6 +18,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -63,7 +64,7 @@ func main() {
 	// rejects non-HTML content, so OpenAPI/Swagger JSON is retrieved with
 	// tldt.FetchRaw — the same SSRF/redirect/size-hardened transport, minus the
 	// HTML gate and extraction.
-	body, meta, err := tldt.FetchRaw(*url, tldt.FetchOptions{
+	body, meta, err := tldt.FetchRaw(context.Background(), *url, tldt.FetchOptions{
 		Timeout:  *timeout,
 		MaxBytes: 10 * 1024 * 1024,
 	})
@@ -115,25 +116,27 @@ func main() {
 	if *outputJSON {
 		// Output structured JSON
 		output := struct {
-			APITitle      string            `json:"api_title,omitempty"`
-			APIVersion    string            `json:"api_version,omitempty"`
-			OriginalSize  int               `json:"original_size_bytes"`
-			SummaryTokens int               `json:"summary_tokens"`
-			Reduction     int               `json:"reduction_percent"`
-			Warnings      []string          `json:"warnings,omitempty"`
-			PIIFindings   []tldt.PIIFinding `json:"pii_findings,omitempty"`
-			Redactions    int               `json:"redactions"`
-			Summary       string            `json:"summary"`
+			APITitle          string            `json:"api_title,omitempty"`
+			APIVersion        string            `json:"api_version,omitempty"`
+			OriginalSize      int               `json:"original_size_bytes"`
+			SummaryTokens     int               `json:"summary_tokens"`
+			Reduction         int               `json:"reduction_percent"`
+			Warnings          []string          `json:"warnings,omitempty"`
+			PIIFindings       []tldt.PIIFinding `json:"pii_findings,omitempty"`
+			InvisiblesRemoved int               `json:"invisibles_removed"`
+			PIIRedactions     int               `json:"pii_redactions"`
+			Summary           string            `json:"summary"`
 		}{
-			APITitle:      apiDoc.Info.Title,
-			APIVersion:    apiDoc.Info.Version,
-			OriginalSize:  len(body),
-			SummaryTokens: result.TokensOut,
-			Reduction:     result.Reduction,
-			Warnings:      result.Warnings,
-			PIIFindings:   result.PIIFindings,
-			Redactions:    result.Redactions,
-			Summary:       result.Summary,
+			APITitle:          apiDoc.Info.Title,
+			APIVersion:        apiDoc.Info.Version,
+			OriginalSize:      len(body),
+			SummaryTokens:     result.TokensOut,
+			Reduction:         result.Reduction,
+			Warnings:          result.Warnings,
+			PIIFindings:       result.PIIFindings,
+			InvisiblesRemoved: result.InvisiblesRemoved,
+			PIIRedactions:     result.PIIRedactions,
+			Summary:           result.Summary,
 		}
 
 		enc := json.NewEncoder(os.Stdout)
@@ -163,8 +166,8 @@ func main() {
 			fmt.Println()
 		}
 
-		if result.Redactions > 0 {
-			fmt.Printf("=== Redactions: %d ===\n", result.Redactions)
+		if result.InvisiblesRemoved > 0 || result.PIIRedactions > 0 {
+			fmt.Printf("=== Redactions: %d invisible, %d PII ===\n", result.InvisiblesRemoved, result.PIIRedactions)
 			fmt.Println()
 		}
 

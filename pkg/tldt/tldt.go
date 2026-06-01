@@ -1,6 +1,7 @@
 package tldt
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -83,13 +84,14 @@ type PIIFinding struct {
 
 // PipelineResult is the output of Pipeline.
 type PipelineResult struct {
-	Summary     string
-	TokensIn    int
-	TokensOut   int
-	Reduction   int
-	Warnings    []string
-	Redactions  int
-	PIIFindings []PIIFinding // populated when DetectPII or SanitizePII is true; nil otherwise
+	Summary           string
+	TokensIn          int
+	TokensOut         int
+	Reduction         int
+	Warnings          []string
+	InvisiblesRemoved int          // invisible Unicode codepoints stripped by the Sanitize stage
+	PIIRedactions     int          // PII/secret spans redacted by the SanitizePII stage (== len(PIIFindings) on that path)
+	PIIFindings       []PIIFinding // populated when DetectPII or SanitizePII is true; nil otherwise
 }
 
 // FetchResult is the output of Fetch with full HTTP metadata.
@@ -244,11 +246,12 @@ func SanitizePII(text string) (string, []PIIFinding) {
 
 // Fetch retrieves a URL and extracts the main article text using readability.
 // SSRF protection blocks private/loopback/link-local IPs. Redirect chain capped at 5 hops.
+// ctx cancels the in-flight request and propagates to every dial.
 //
 // On success, returns a FetchResult with extracted text and HTTP metadata.
 // Errors are wrapped with context: use errors.Is() to check for sentinel errors
 // (ErrSSRFBlocked, ErrRedirectLimit, ErrHTTPError, ErrNonHTML).
-func Fetch(urlStr string, opts FetchOptions) (FetchResult, error) {
+func Fetch(ctx context.Context, urlStr string, opts FetchOptions) (FetchResult, error) {
 	if opts.Timeout == 0 {
 		opts.Timeout = 30 * time.Second
 	}
@@ -256,7 +259,7 @@ func Fetch(urlStr string, opts FetchOptions) (FetchResult, error) {
 		opts.MaxBytes = 5 * 1024 * 1024
 	}
 
-	res, err := fetcher.Fetch(urlStr, opts.Timeout, opts.MaxBytes)
+	res, err := fetcher.Fetch(ctx, urlStr, opts.Timeout, opts.MaxBytes)
 	if err != nil {
 		// Map fetcher sentinels to the package's public sentinels via errors.Is.
 		switch {
@@ -286,7 +289,8 @@ func Fetch(urlStr string, opts FetchOptions) (FetchResult, error) {
 //
 // Errors are wrapped with context: use errors.Is() to check for sentinel errors
 // (ErrSSRFBlocked, ErrRedirectLimit, ErrHTTPError). ErrNonHTML never occurs.
-func FetchRaw(urlStr string, opts FetchOptions) ([]byte, FetchResult, error) {
+// ctx cancels the in-flight request and propagates to every dial.
+func FetchRaw(ctx context.Context, urlStr string, opts FetchOptions) ([]byte, FetchResult, error) {
 	if opts.Timeout == 0 {
 		opts.Timeout = 30 * time.Second
 	}
@@ -294,7 +298,7 @@ func FetchRaw(urlStr string, opts FetchOptions) ([]byte, FetchResult, error) {
 		opts.MaxBytes = 5 * 1024 * 1024
 	}
 
-	body, res, err := fetcher.FetchRaw(urlStr, opts.Timeout, opts.MaxBytes)
+	body, res, err := fetcher.FetchRaw(ctx, urlStr, opts.Timeout, opts.MaxBytes)
 	if err != nil {
 		if errors.Is(err, fetcher.ErrHTTPError) {
 			return nil, FetchResult{}, fmt.Errorf("tldt.FetchRaw: %w: %v", ErrHTTPError, err)
@@ -436,13 +440,13 @@ func ReportInvisibles(text string) []InvisibleReport {
 // Pipeline runs the full sanitize -> detect -> summarize flow in one call.
 // This is the primary embedding use case for AI API middleware.
 func Pipeline(text string, opts PipelineOptions) (PipelineResult, error) {
-	var redactions int
+	var invisiblesRemoved, piiRedactions int
 	var piiFindings []PIIFinding
 
 	// Step 1: Unicode sanitize (if enabled)
 	if opts.Sanitize {
 		inv := ReportInvisibles(text)
-		redactions = len(inv)
+		invisiblesRemoved = len(inv)
 		text = SanitizeAll(text)
 	}
 
@@ -450,6 +454,7 @@ func Pipeline(text string, opts PipelineOptions) (PipelineResult, error) {
 	if opts.SanitizePII {
 		redacted, findings := detector.SanitizePII(text)
 		piiFindings = toPublicPIIFindings(findings)
+		piiRedactions = len(piiFindings)
 		text = redacted
 	} else if opts.DetectPII {
 		findings := detector.DetectPII(text)
@@ -470,12 +475,13 @@ func Pipeline(text string, opts PipelineOptions) (PipelineResult, error) {
 	}
 
 	return PipelineResult{
-		Summary:     result.Summary,
-		TokensIn:    result.TokensIn,
-		TokensOut:   result.TokensOut,
-		Reduction:   result.Reduction,
-		Warnings:    warnings,
-		Redactions:  redactions,
-		PIIFindings: piiFindings,
+		Summary:           result.Summary,
+		TokensIn:          result.TokensIn,
+		TokensOut:         result.TokensOut,
+		Reduction:         result.Reduction,
+		Warnings:          warnings,
+		InvisiblesRemoved: invisiblesRemoved,
+		PIIRedactions:     piiRedactions,
+		PIIFindings:       piiFindings,
 	}, nil
 }
