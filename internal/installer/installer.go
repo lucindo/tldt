@@ -43,7 +43,10 @@ func Install(opts Options) error {
 		return fmt.Errorf("resolving home dir: %w", err)
 	}
 
-	targets := resolveTargets(homeDir, opts)
+	targets, err := resolveTargets(homeDir, opts)
+	if err != nil {
+		return err
+	}
 	if len(targets) == 0 {
 		return fmt.Errorf("no install targets found")
 	}
@@ -69,14 +72,15 @@ func Install(opts Options) error {
 // Claude Code is included on the default run, --target all, or --target claude;
 // a specific optional --target installs only that app. Optional apps are included
 // if their base directory exists (or is explicitly targeted). opts.SkillDir
-// overrides all detection.
-func resolveTargets(homeDir string, opts Options) []installTarget {
+// overrides all detection. Returns an error if an explicitly targeted optional
+// app's base directory cannot be created.
+func resolveTargets(homeDir string, opts Options) ([]installTarget, error) {
 	// --skill-dir override: single custom target, no hook registration
 	if opts.SkillDir != "" {
 		return []installTarget{{
 			name:      "custom",
 			skillDest: filepath.Join(opts.SkillDir, "tldt", "SKILL.md"),
-		}}
+		}}, nil
 	}
 
 	// Claude Code is included on the default/all run or when explicitly targeted.
@@ -92,7 +96,7 @@ func resolveTargets(homeDir string, opts Options) []installTarget {
 		})
 	}
 	if opts.Target == "claude" {
-		return targets
+		return targets, nil
 	}
 
 	// Optional apps: detect by base directory existence
@@ -125,11 +129,14 @@ func resolveTargets(homeDir string, opts Options) []installTarget {
 		_, err := os.Stat(o.detectDir)
 		dirExists := err == nil
 		// Auto-create directory when explicitly targeted (e.g., --target opencode)
-		// This enables seamless first-time installation for OpenCode, Cursor, Agents
+		// This enables seamless first-time installation for OpenCode, Cursor, Agents.
+		// A failure here on an explicit target is fatal — silently dropping it would
+		// report a false success.
 		if opts.Target == o.name && !dirExists {
-			if err := os.MkdirAll(o.detectDir, 0755); err == nil {
-				dirExists = true
+			if err := os.MkdirAll(o.detectDir, 0755); err != nil {
+				return nil, fmt.Errorf("creating base directory %q for target %q: %w", o.detectDir, o.name, err)
 			}
+			dirExists = true
 		}
 		if dirExists {
 			targets = append(targets, installTarget{
@@ -140,7 +147,7 @@ func resolveTargets(homeDir string, opts Options) []installTarget {
 		}
 	}
 
-	return targets
+	return targets, nil
 }
 
 // installSkillFile reads the embedded SKILL.md and writes it to destPath.
@@ -175,6 +182,10 @@ func installHookFile(destPath string) error {
 // Idempotent: if hookCmd is already registered, returns nil without modifying the file.
 // hookCmd MUST be an absolute expanded path (not $HOME/...).
 func PatchSettingsJSON(settingsPath string, hookCmd string) error {
+	if !filepath.IsAbs(hookCmd) {
+		return fmt.Errorf("hookCmd must be an absolute path, got %q", hookCmd)
+	}
+
 	data, err := os.ReadFile(settingsPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("reading settings.json: %w", err)
@@ -189,15 +200,30 @@ func PatchSettingsJSON(settingsPath string, hookCmd string) error {
 		settings = make(map[string]any)
 	}
 
-	// Navigate/create hooks.UserPromptSubmit array
-	hooks, _ := settings["hooks"].(map[string]any)
-	if hooks == nil {
+	// Navigate/create hooks. A present-but-wrong-typed "hooks" key is a user
+	// config we must not silently overwrite — fail loudly instead.
+	var hooks map[string]any
+	if raw, present := settings["hooks"]; present {
+		h, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("settings.json %q: hooks must be a JSON object, got %T; refusing to overwrite", settingsPath, raw)
+		}
+		hooks = h
+	} else {
 		hooks = make(map[string]any)
 		settings["hooks"] = hooks
 	}
 
-	// Idempotency: check if hookCmd is already registered
-	existing, _ := hooks["UserPromptSubmit"].([]any)
+	// Idempotency: check if hookCmd is already registered. A present-but-wrong-typed
+	// UserPromptSubmit is likewise refused rather than clobbered.
+	var existing []any
+	if raw, present := hooks["UserPromptSubmit"]; present {
+		ups, ok := raw.([]any)
+		if !ok {
+			return fmt.Errorf("settings.json %q: hooks.UserPromptSubmit must be a JSON array, got %T; refusing to overwrite", settingsPath, raw)
+		}
+		existing = ups
+	}
 	for _, e := range existing {
 		m, ok := e.(map[string]any)
 		if !ok {

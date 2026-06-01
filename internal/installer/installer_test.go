@@ -183,6 +183,73 @@ func TestPatchSettingsJSON_Idempotent(t *testing.T) {
 	}
 }
 
+// TestPatchSettingsJSON_RejectsRelativeHookCmd pins G9: the doc says hookCmd MUST
+// be absolute, so a relative path is rejected rather than silently registered.
+func TestPatchSettingsJSON_RejectsRelativeHookCmd(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tldt-settings-relhook-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+
+	settingsPath := filepath.Join(tmpDir, "settings.json")
+	if err := PatchSettingsJSON(settingsPath, "relative/tldt-hook.sh"); err == nil {
+		t.Error("PatchSettingsJSON: expected error for relative hookCmd, got nil")
+	}
+	if _, err := os.Stat(settingsPath); err == nil {
+		t.Error("PatchSettingsJSON: must not create settings.json when hookCmd is invalid")
+	}
+}
+
+// TestPatchSettingsJSON_RefusesMalformedHooks pins G8: when settings.json has a
+// "hooks" key of an unexpected type, PatchSettingsJSON errors instead of silently
+// overwriting the user's config.
+func TestPatchSettingsJSON_RefusesMalformedHooks(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tldt-settings-malformed-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+
+	settingsPath := filepath.Join(tmpDir, "settings.json")
+	original := `{"hooks":"not-an-object"}`
+	if err := os.WriteFile(settingsPath, []byte(original), 0644); err != nil {
+		t.Fatalf("writing settings.json: %v", err)
+	}
+
+	if err := PatchSettingsJSON(settingsPath, "/usr/local/bin/tldt-hook.sh"); err == nil {
+		t.Error("PatchSettingsJSON: expected error for non-object \"hooks\", got nil")
+	}
+	// The user's file must be left untouched.
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("reading settings.json: %v", err)
+	}
+	if string(data) != original {
+		t.Errorf("PatchSettingsJSON clobbered malformed settings.json: got %q, want %q", data, original)
+	}
+}
+
+// TestResolveTargets_ExplicitTargetMkdirFails pins G7: an explicit --target whose
+// base directory cannot be created surfaces a loud error rather than a false success.
+func TestResolveTargets_ExplicitTargetMkdirFails(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tldt-mkdirfail-*")
+	if err != nil {
+		t.Fatalf("creating temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+
+	// opencode's base dir is <home>/.config/opencode. Plant a regular file at
+	// <home>/.config so MkdirAll of the opencode dir fails (a parent is a file).
+	if err := os.WriteFile(filepath.Join(tmpDir, ".config"), []byte("x"), 0644); err != nil {
+		t.Fatalf("planting .config file: %v", err)
+	}
+
+	if _, err := resolveTargets(tmpDir, Options{Target: "opencode"}); err == nil {
+		t.Error("resolveTargets: expected error when explicit-target base dir can't be created, got nil")
+	}
+}
+
 func TestResolveTargets_AlwaysIncludesClaude(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tldt-targets-*")
 	if err != nil {
@@ -190,7 +257,10 @@ func TestResolveTargets_AlwaysIncludesClaude(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
-	targets := resolveTargets(tmpDir, Options{})
+	targets, err := resolveTargets(tmpDir, Options{})
+	if err != nil {
+		t.Fatalf("resolveTargets: %v", err)
+	}
 	if len(targets) == 0 {
 		t.Fatal("resolveTargets returned empty list")
 	}
@@ -210,7 +280,10 @@ func TestResolveTargets_SpecificOptionalExcludesClaude(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
-	targets := resolveTargets(tmpDir, Options{Target: "opencode"})
+	targets, err := resolveTargets(tmpDir, Options{Target: "opencode"})
+	if err != nil {
+		t.Fatalf("resolveTargets: %v", err)
+	}
 	if len(targets) != 1 {
 		t.Fatalf("--target opencode: got %d targets, want 1: %+v", len(targets), targets)
 	}
@@ -238,7 +311,10 @@ func TestResolveTargets_TargetClaudeOnly(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(tmpDir, ".cursor"), 0755); err != nil {
 		t.Fatalf("creating .cursor dir: %v", err)
 	}
-	targets := resolveTargets(tmpDir, Options{Target: "claude"})
+	targets, err := resolveTargets(tmpDir, Options{Target: "claude"})
+	if err != nil {
+		t.Fatalf("resolveTargets: %v", err)
+	}
 	if len(targets) != 1 || targets[0].name != "claude" {
 		t.Errorf("--target claude: got %+v, want exactly [claude]", targets)
 	}
@@ -252,7 +328,10 @@ func TestResolveTargets_SkillDirOverride(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	customDir := filepath.Join(tmpDir, "custom-skills")
-	targets := resolveTargets(tmpDir, Options{SkillDir: customDir})
+	targets, err := resolveTargets(tmpDir, Options{SkillDir: customDir})
+	if err != nil {
+		t.Fatalf("resolveTargets: %v", err)
+	}
 
 	if len(targets) != 1 {
 		t.Errorf("SkillDir override: got %d targets, want 1", len(targets))
@@ -281,7 +360,10 @@ func TestResolveTargets_DetectsOptionalApps(t *testing.T) {
 		t.Fatalf("creating .cursor dir: %v", err)
 	}
 
-	targets := resolveTargets(tmpDir, Options{})
+	targets, err := resolveTargets(tmpDir, Options{})
+	if err != nil {
+		t.Fatalf("resolveTargets: %v", err)
+	}
 	found := false
 	for _, t2 := range targets {
 		if t2.name == "cursor" {
