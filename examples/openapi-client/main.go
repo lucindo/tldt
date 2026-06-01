@@ -169,7 +169,9 @@ func main() {
 
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		enc.Encode(output)
+		if err := enc.Encode(output); err != nil {
+			log.Fatalf("encoding JSON output: %v", err)
+		}
 	} else {
 		// Human-readable output
 		fmt.Printf("Original: ~%d tokens\n", result.TokensIn)

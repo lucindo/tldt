@@ -94,23 +94,33 @@ func TestDetect_InjectionFound(t *testing.T) {
 }
 
 func TestDetect_OutlierFinding(t *testing.T) {
-	// One sentence is wildly off-topic relative to the rest; at the default
-	// outlier threshold Detect must flag it. This pins that Detect honors
-	// opts.OutlierThreshold (previously the option was ignored).
+	// One sentence is wildly off-topic relative to the rest. Detect must flag it,
+	// AND a stricter threshold must flag strictly fewer sentences than a permissive
+	// one. The strict-fewer comparison pins that Detect actually honors
+	// opts.OutlierThreshold — if the option were ignored (a fixed default), both
+	// thresholds would return identical findings and this test would fail.
 	text := "The cat sat on the mat. The cat played with yarn. The cat slept all day. " +
 		"Quantum chromodynamics governs the strong nuclear force via gluon exchange."
-	result, err := Detect(text, DetectOptions{OutlierThreshold: DefaultOutlierThreshold})
-	if err != nil {
-		t.Fatalf("Detect: unexpected error: %v", err)
-	}
-	found := false
-	for _, f := range result.Report.Findings {
-		if f.Category == "outlier" {
-			found = true
+	countOutliers := func(threshold float64) int {
+		result, err := Detect(text, DetectOptions{OutlierThreshold: threshold})
+		if err != nil {
+			t.Fatalf("Detect(threshold=%v): unexpected error: %v", threshold, err)
 		}
+		n := 0
+		for _, f := range result.Report.Findings {
+			if f.Category == "outlier" {
+				n++
+			}
+		}
+		return n
 	}
-	if !found {
-		t.Errorf("Detect: expected an outlier finding, got %+v", result.Report.Findings)
+	strict := countOutliers(0.999)
+	permissive := countOutliers(0.50)
+	if strict < 1 {
+		t.Errorf("Detect(threshold=0.999): expected the off-topic sentence flagged, got 0 outliers")
+	}
+	if permissive <= strict {
+		t.Errorf("Detect: permissive threshold must flag more outliers than strict (option honored); got permissive=%d strict=%d", permissive, strict)
 	}
 }
 

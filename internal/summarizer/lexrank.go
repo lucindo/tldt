@@ -85,10 +85,9 @@ func lexrankCompute(sentences []string, keepRawMatrix bool) lexrankComputed {
 	for i, w := range vocab {
 		wordIdx[w] = i
 	}
-	vocabSize := len(vocab)
 	vectors := make([][]float64, len(sentences))
 	for i, words := range wordLists {
-		vectors[i] = buildTFVector(words, wordIdx, vocabSize)
+		vectors[i] = buildTFVector(words, wordIdx, c.vocabSize)
 	}
 
 	// Build n×n cosine similarity matrix (continuous — no threshold), optionally

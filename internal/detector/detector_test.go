@@ -355,6 +355,30 @@ func TestDetectOutliers_CustomThreshold(t *testing.T) {
 	}
 }
 
+func TestDetectOutliers_ThresholdBoundaryExclusive(t *testing.T) {
+	// Sentence 2's similarity to the other two is exactly 0.5, so its
+	// outlier_score is exactly 0.5 (1 - mean(0.5, 0.5)). 0.5 is exactly
+	// representable, so the comparison against a 0.5 threshold is bit-exact.
+	// The threshold is exclusive (strict >), so score == threshold must NOT flag;
+	// a regression to >= would wrongly flag it here.
+	sentences := []string{"A", "B", "outlier"}
+	matrix := buildUniformMatrix(3, 0.90)
+	for j := range 3 {
+		if j != 2 {
+			matrix[2][j] = 0.5
+			matrix[j][2] = 0.5
+		}
+	}
+	// score == threshold (0.5): not flagged.
+	if findings := DetectOutliers(sentences, matrix, 0.5); len(findings) != 0 {
+		t.Errorf("DetectOutliers(threshold=0.5): score==threshold must not flag (exclusive), got %d findings", len(findings))
+	}
+	// score just above threshold (0.49): flagged.
+	if findings := DetectOutliers(sentences, matrix, 0.49); len(findings) != 1 {
+		t.Errorf("DetectOutliers(threshold=0.49): want 1 finding for score 0.5, got %d", len(findings))
+	}
+}
+
 func TestDetectOutliers_ScoreIsOutlierScore(t *testing.T) {
 	sentences := []string{"A", "B", "outlier"}
 	matrix := buildUniformMatrix(3, 0.80)
