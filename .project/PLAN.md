@@ -4,17 +4,18 @@ Source: `.project/SPEC.md` — Full Code Audit (Behavior-Preserving)
 
 ## Now
 
-**State** — Branch `cleanup` COMPLETE and ready for a draft PR into `gleicon/tldt:main`. The full behavior-preserving audit (A-groups, R1–R15, C1–C3) plus the final 6-review `/ds-*` pass are shipped, followed by four maintainer-requested follow-ups. Tree green on every commit: lint 0, `go test -race ./...` all pass, 15/15 golden byte-identical, `pkg/tldt` API additive-only (`FetchRaw` added; nothing removed/changed).
+**State** — Branch `cleanup` COMPLETE, draft PR #1 open into `gleicon/tldt:main`. The full behavior-preserving audit (A-groups, R1–R15, C1–C3) plus the final 6-review `/ds-*` pass are shipped, followed by maintainer-requested follow-ups and a thread-3 hardening pass. Tree green on every commit: lint 0, `go test -race ./...` all pass, 15/15 golden byte-identical (the `--url` path is excluded). The audit (threads 1 & 2) kept the `pkg/tldt` API identical; thread 3 intentionally changed it — `Fetch`/`FetchRaw` gained a leading `context.Context` and `PipelineResult.Redactions` split into `InvisiblesRemoved` + `PIIRedactions` (module unreleased, so no compat break).
 
 **Latest follow-ups (after the audit):**
 - `e10f3b9` — final-review pass: 4 behavior-preserving fixes (vocabSize local, 2 test-quality fixes, example enc.Encode).
 - `fbfbc58` — **S1** redaction coverage: `slack-token` pattern + shared `highEntropyBase64()` fed into `scanPII` (redacted as `[REDACTED:secret]`); AWS/generic skipped (FP risk; entropy gate >4.5 controls FPs); CLI/README/security.md/library.html synced.
-- `8754267` — **FetchRaw**: hardened JSON/non-HTML fetch primitive (shared `doHardenedRequest`); `Fetch` byte-identical; openapi example switched onto it → gains SSRF protection.
+- `8754267` — **FetchRaw**: hardened JSON/non-HTML fetch primitive (shared `doHardenedRequest`); `Fetch` output byte-identical; openapi example switched onto it → gains SSRF protection.
 - `8e2a44e` — stripped leaked GSD lingo ("Phase 9") from `docs/security.md` + `docs/index.html`.
+- **Thread-3 hardening** (`d9ca4e7`, `71654ad`, `3c72976`): installer fail-loudly (G7/G8/G9); `context.Context` on `Fetch`/`FetchRaw` (G2) + non-positive `maxBytes`/`timeout` preconditions (G1); `PipelineResult.Redactions` split; `--sanitize-pii` over-redaction trade-off documented. CLI golden 15/15 byte-identical; lint 0; tests added.
 
-**Next** — Create the draft PR (`lucindo:cleanup` → `gleicon/tldt:main`). No roadmap items remain. Remaining recommend-only residuals (G1/G2/G7–G9/Q1/Q4/B1/B2/T3) are minor/optional — see AUDIT.md "Final review pass" table.
+**Next** — Curate history (drop checkpoint/doc-churn commits, keep the fix commits) and merge via a real merge (not squash); regenerate/drop the commit-hash tables at merge. Deferred residuals (Q1/Q4/B1/B2) are minor/optional — see AUDIT.md residuals table.
 
-**Open questions** — None blocking. Maintainer prior choices: R7 option A, R6 incl. SSN+Luhn, R13 full legacy removal, C1–C3, S1 option 2+Slack, FetchRaw additive API, `.project/` kept tracked.
+**Open questions** — None blocking. Maintainer prior choices: R7 option A, R6 incl. SSN+Luhn, R13 full legacy removal, C1–C3, S1 option 2+Slack, thread-3 API changes (ctx + Redactions split) accepted since module unreleased, curated-merge over squash, `.project/` kept tracked.
 
 ## Roadmap
 

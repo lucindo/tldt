@@ -4,6 +4,8 @@
 
 All ✅ A groups applied + approved ⚠️ R1/R2/R4. Each group committed separately on `cleanup`, verified (build + vet + golangci-lint + `test -race` + golden I/O) before commit. Final state: lint 0 issues, all tests pass (366 test funcs), `go.mod`/`go.sum` unchanged, exported `pkg/tldt` API identical, golden I/O for all 15 baseline scenarios identical.
 
+> **API note:** "API identical" describes the audit (threads 1 & 2). The later thread-3 hardening pass intentionally changed the `pkg/tldt` API — `Fetch`/`FetchRaw` gained a leading `context.Context`, and `PipelineResult.Redactions` was split into `InvisiblesRemoved` + `PIIRedactions`. The module is unreleased, so no compatibility break. CLI golden output remained 15/15 byte-identical throughout. See the residuals table below.
+
 | Commit | Group |
 |--------|-------|
 | `d2b03c9` | A1 lint gate (`.golangci.yml` v2 defaults, `make lint`, gofmt, errcheck/staticcheck) |
@@ -50,20 +52,23 @@ Judgement calls: R7 took option A (complete the feature) but landed byte-identic
 Four behavior-preserving fixes applied (`e10f3b9`), verified build+lint+`test -race`+15/15 golden+API-parity:
 - `lexrank.go` drop redundant `vocabSize` local · `detector_test.go` exclusive-threshold boundary test (guards `>`→`>=`) · `tldt_test.go` `TestDetect_OutlierFinding` now compares strict vs permissive thresholds (was passing zero-value default, proving nothing) · `openapi-client/main.go` handle discarded `enc.Encode` error.
 
-**Recommend-only residuals (maintainer's call — behavior-changing or scope decisions):**
+**Recommend-only residuals — most now resolved in the thread-3 hardening pass; the rest are the maintainer's call.**
 
-| # | Sev | Location | Recommendation |
-|---|-----|----------|----------------|
-| S1 | ~~High~~ **RESOLVED** (`fbfbc58`) | `detector.go` `piiPatterns`/`scanPII` | Implemented option 2 + Slack: added `slack-token` pattern (flows to detect+redact) and a shared `highEntropyBase64()` helper whose spans `scanPII` now redacts as `[REDACTED:secret]`. AWS/generic standalone patterns deliberately skipped (high FP); the entropy gate (>4.5) controls FPs. Docs (CLI help, README, security.md, library.html) synced to actual coverage. |
-| G1 | minor | `fetcher.go:145` `Fetch` | No precondition on `maxBytes>0`/`timeout>0`; a *negative* `maxBytes` bypasses the `pkg/tldt` default-fill (triggers only on `==0`) → misleading "no readable text" error. Add a boundary assert. |
-| G7–G9 | minor | `installer.go` | Fail-loudly gaps: `MkdirAll` error swallowed → silent skip on explicit `--target`; type-assertion `ok` discarded → malformed user `hooks`/`UserPromptSubmit` silently clobbered; `hookCmd` not validated absolute despite doc "MUST". |
-| B2 | minor | `fetcher.go:71` `safeDialContext` | Returns `(nil,nil)` if `lookupHost` yields empty+nil (test-seam-only; real resolver never does). Optional defensive guard. |
-| G2 | minor | `fetcher.go` `Fetch` | No `context.Context` param → caller can't cancel in-flight fetch. API-design choice. |
-| Q1 | minor | `main.go:74–115` | Effective-config resolution (~42 lines) could extract `resolveSettings()`; `main()` is ~167 lines. Optional (C2/C3 already decomposed the heavy logic). |
-| Q4 | minor | `tldt.go:108–112` | Sentinel re-export style split (2 aliased, 2 redefined+remapped). Functionally correct (`errors.Is` works) — style only. |
-| B1 | note | `detector.go:237` | base64 re-padding drops a token ending in `=`. **Pre-existing, advisory-only, NOT an audit regression** (new formula is math-identical to old loop). Fixing changes stderr for some inputs. |
+The thread-3 follow-up applied the boundary/fail-loudly residuals and made two intentional `pkg/tldt` API changes (the module is unreleased, so no compatibility break). CLI golden output stayed 15/15 byte-identical (the `--url` path is excluded from the golden set). Commit hashes below predate the planned curated rebase and will be regenerated/dropped at merge.
+
+| # | Sev | Location | Status / Recommendation |
+|---|-----|----------|--------------------------|
+| S1 | ~~High~~ **RESOLVED** (`fbfbc58`) | `detector.go` `piiPatterns`/`scanPII` | Implemented option 2 + Slack: added `slack-token` pattern (flows to detect+redact) and a shared `highEntropyBase64()` helper whose spans `scanPII` now redacts as `[REDACTED:secret]`. AWS/generic standalone patterns deliberately skipped (high FP); the entropy gate (>4.5) controls FPs. Docs (CLI help, README, security.md, library.html) synced — including the over-redaction trade-off (dense non-secret base64 can also be redacted). |
+| G1 | **RESOLVED** (`71654ad`) | `fetcher.go` `Fetch`/`FetchRaw` | Non-positive `maxBytes`/`timeout` now rejected with a clear error instead of a negative `maxBytes` silently bypassing the `pkg/tldt` default-fill. Tests added. |
+| G2 | **RESOLVED** (`71654ad`) | `pkg/tldt` + `fetcher` `Fetch`/`FetchRaw` | `ctx context.Context` added as the leading param (replaces internal `context.Background()`); cancellation propagates to the request and every dial. **API change** — callers (CLI, examples, doc) updated. |
+| G7–G9 | **RESOLVED** (`d9ca4e7`) | `installer.go` | Fail-loudly fixes: explicit `--target` `MkdirAll` failure now errors instead of a false success (G7); `PatchSettingsJSON` refuses a malformed `hooks`/`UserPromptSubmit` rather than clobbering the user's `settings.json` (G8); `hookCmd` asserted absolute (G9). Tests added. |
+| Redactions split | **RESOLVED** (`71654ad`) | `pkg/tldt` `PipelineResult` | The single `Redactions` field counted invisible-unicode strips only, reporting `0` while `--sanitize-pii` redacted secrets. Split into `InvisiblesRemoved` + `PIIRedactions`. **API change** — examples/doc updated; the test that pinned the old semantic was flipped. |
+| — | **RESOLVED** (`8754267`) | `examples/openapi-client` SSRF gap | The example's hand-rolled `http.Client` (from R14) had no SSRF hardening. Added `FetchRaw` — a hardened fetch primitive (shared `doHardenedRequest`: SSRF dial-time validation + redirect/byte/timeout caps, no content-type gate) — and switched the example onto `tldt.FetchRaw`. `Fetch` output stays byte-identical. |
+| B1 | **deferred** | `detector.go:237` | base64 re-padding drops a token ending in `=`. Was advisory-only (stderr), but now that `highEntropyBase64()` is shared with redaction it is **also a possible redaction miss** (an `=`-terminated secret whose captured length isn't a multiple of 4 escapes `[REDACTED:secret]`). Real secrets are usually correctly padded; add a regression test before relying on `--sanitize-pii` for such tokens. |
+| B2 | **deferred** | `fetcher.go:71` `safeDialContext` | Returns `(nil,nil)` if `lookupHost` yields empty+nil (test-seam-only; real resolver never does). Optional defensive guard. |
+| Q1 | **deferred** | `main.go` | Effective-config resolution (~42 lines) could extract `resolveSettings()`. Optional (C2/C3 already decomposed the heavy logic). |
+| Q4 | **deferred** | `tldt.go:108–112` | Sentinel re-export style split (2 aliased, 2 redefined+remapped). Functionally correct (`errors.Is` works) — style only. |
 | — | note | `fetcher.go` `FinalURL`/SSRF errors | Surface resolved internal IP/host in errors — harmless in single-user CLI; doc note for library consumers embedding `Fetch` in a multi-tenant service. |
-| — | **RESOLVED** (`8754267`) | `examples/openapi-client` SSRF gap | The example's hand-rolled `http.Client` (from R14) had no SSRF hardening. Added `FetchRaw` — a hardened fetch primitive (shared `doHardenedRequest`: SSRF dial-time validation + redirect/byte/timeout caps, no content-type gate) — and switched the example onto `tldt.FetchRaw`. `Fetch` stays byte-identical; API addition is additive. |
 
 Refuted (not slop / not bugs, don't re-flag): `keepRawMatrix` flag (bivalued, avoids n² alloc) · ensemble one-line wrappers · `_ = flag.Bool("detect-injection")` (intentional CLI-compat) · example unwrapped errors · `DetectPII` vs `SanitizePII` count divergence on nested matches (by design, documented).
 
