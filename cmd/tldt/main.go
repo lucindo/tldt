@@ -40,94 +40,7 @@ func main() {
 	detectPII := flag.Bool("detect-pii", false, "report PII and secret patterns (email, API keys, JWTs, credit cards) to stderr (advisory)")
 	sanitizePII := flag.Bool("sanitize-pii", false, "redact PII in input before summarization; reports redaction count to stderr")
 	fromHTML := flag.Bool("from-html", false, "convert HTML input to Markdown before summarization (uses readability + html-to-markdown)")
-	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "tldt - Text summarization and security preprocessing for LLM input")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "USAGE:")
-		fmt.Fprintln(os.Stderr, "  tldt [options] [text...]")
-		fmt.Fprintln(os.Stderr, "  cat file.txt | tldt [options]")
-		fmt.Fprintln(os.Stderr, "  tldt -f article.txt [options]")
-		fmt.Fprintln(os.Stderr, "  tldt --url https://example.com/article [options]")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "CORE OPTIONS:")
-		fmt.Fprintln(os.Stderr, "  -f, -file string       Read input from file")
-		fmt.Fprintln(os.Stderr, "  --url string           Fetch and summarize URL content")
-		fmt.Fprintln(os.Stderr, "  --algorithm string     Summarization algorithm: lexrank (default), textrank, graph, ensemble")
-		fmt.Fprintln(os.Stderr, "  --sentences int        Number of output sentences (default: 5)")
-		fmt.Fprintln(os.Stderr, "  --level string         Compression preset: aggressive (3), standard (5), lite (10)")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "SECURITY OPTIONS:")
-		fmt.Fprintln(os.Stderr, "  --sanitize             Strip invisible Unicode characters and NFKC-normalize")
-		fmt.Fprintln(os.Stderr, "  --detect-injection     Report prompt injection patterns to stderr (advisory)")
-		fmt.Fprintln(os.Stderr, "  --injection-threshold float  Outlier detection threshold (default: 0.99)")
-		fmt.Fprintln(os.Stderr, "  --detect-pii           Report PII/secrets (emails, API keys, JWTs, credit cards)")
-		fmt.Fprintln(os.Stderr, "  --sanitize-pii         Redact PII before summarization")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "FORMAT OPTIONS:")
-		fmt.Fprintln(os.Stderr, "  --format string        Output format: text (default), json, markdown")
-		fmt.Fprintln(os.Stderr, "  --verbose              Print token statistics to stderr")
-		fmt.Fprintln(os.Stderr, "  --paragraphs int       Group output sentences into N paragraphs")
-		fmt.Fprintln(os.Stderr, "  --no-cap               Disable 2000-sentence processing limit")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "HTML PROCESSING:")
-		fmt.Fprintln(os.Stderr, "  --from-html            Convert HTML input to Markdown before summarization")
-		fmt.Fprintln(os.Stderr, "                        (uses readability extraction + html-to-markdown)")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "CONFIGURATION:")
-		fmt.Fprintln(os.Stderr, "  --print-threshold      Print hook token threshold from config and exit")
-		fmt.Fprintln(os.Stderr, "  --install-skill        Install Claude Code skill and auto-trigger hook")
-		fmt.Fprintln(os.Stderr, "  --skill-dir string     Override skill install directory")
-		fmt.Fprintln(os.Stderr, "  --target string        Install target: claude|cursor|opencode|agents|all")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "EMBEDDED AI ASSISTANT SKILLS:")
-		fmt.Fprintln(os.Stderr, "  The binary contains embedded skill templates for AI assistants.")
-		fmt.Fprintln(os.Stderr, "  Skills are extracted and installed when you run --install-skill.")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  SKILL.md - Manual /tldt command (all assistants)")
-		fmt.Fprintln(os.Stderr, "    - Claude Code: ~/.claude/skills/tldt/SKILL.md")
-		fmt.Fprintln(os.Stderr, "    - OpenCode:    ~/.config/opencode/skills/tldt/SKILL.md")
-		fmt.Fprintln(os.Stderr, "    - Cursor:      ~/.cursor/skills/tldt/SKILL.md")
-		fmt.Fprintln(os.Stderr, "    - Agents:      ~/.agents/skills/tldt/SKILL.md")
-		fmt.Fprintln(os.Stderr, "    - Usage: Type /tldt <long text> inside the assistant")
-		fmt.Fprintln(os.Stderr, "    - Returns: Token savings + extractive summary")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  tldt-hook.sh - Auto-trigger hook (Claude Code only)")
-		fmt.Fprintln(os.Stderr, "    - Location: ~/.claude/hooks/tldt-hook.sh")
-		fmt.Fprintln(os.Stderr, "    - Auto-summarizes prompts exceeding threshold (default: 2000 tokens)")
-		fmt.Fprintln(os.Stderr, "    - Runs security preprocessing: --sanitize --detect-injection --detect-pii")
-		fmt.Fprintln(os.Stderr, "    - Output guard: re-runs detection on summary before context injection")
-		fmt.Fprintln(os.Stderr, "    - Configurable via ~/.tldt.toml [hook] threshold = N")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "INSTALLATION:")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Auto-detect (installs to all assistants with existing directories):")
-		fmt.Fprintln(os.Stderr, "    tldt --install-skill")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Target specific assistant (auto-creates directory if needed):")
-		fmt.Fprintln(os.Stderr, "    tldt --install-skill --target claude    # SKILL.md + hook + settings.json")
-		fmt.Fprintln(os.Stderr, "    tldt --install-skill --target opencode  # SKILL.md only (auto-creates dir)")
-		fmt.Fprintln(os.Stderr, "    tldt --install-skill --target cursor    # SKILL.md only (auto-creates dir)")
-		fmt.Fprintln(os.Stderr, "    tldt --install-skill --target agents    # SKILL.md only (auto-creates dir)")
-		fmt.Fprintln(os.Stderr, "    tldt --install-skill --target all       # All assistants")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  Notes:")
-		fmt.Fprintln(os.Stderr, "    - Only Claude Code supports auto-trigger hooks (UserPromptSubmit)")
-		fmt.Fprintln(os.Stderr, "    - Other assistants get SKILL.md only (manual /tldt command)")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "EXAMPLES:")
-		fmt.Fprintln(os.Stderr, "  cat article.txt | tldt")
-		fmt.Fprintln(os.Stderr, "  tldt -f transcript.txt --algorithm textrank --sentences 10")
-		fmt.Fprintln(os.Stderr, "  tldt --url https://example.com/article --sanitize --detect-pii")
-		fmt.Fprintln(os.Stderr, "  curl -s https://example.com | tldt --from-html --sentences 3")
-		fmt.Fprintln(os.Stderr, "  tldt \"Long text to summarize\" --format json --verbose")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "CONFIG FILE:")
-		fmt.Fprintln(os.Stderr, "  ~/.tldt.toml - Default settings (algorithm, sentences, format, level)")
-		fmt.Fprintln(os.Stderr, "               - Hook threshold: [hook] section with threshold = N")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "For more information: https://github.com/gleicon/tldt")
-		os.Exit(0)
-	}
+	flag.Usage = usage
 	flag.Parse()
 
 	// Load config file — silent fallback to defaults on any error.
@@ -215,150 +128,22 @@ func main() {
 		os.Exit(0)
 	}
 
-	// --from-html: convert HTML to Markdown before processing.
-	if *fromHTML {
-		converted, err := tldt.ConvertHTML(text, tldt.HTMLConvertOptions{
-			ExtractContent: true,
-			IncludeTitle:   true,
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "html-convert: %v\n", err)
-			os.Exit(1)
-		}
-		// Report conversion stats
-		srcLen := len(text)
-		dstLen := len(converted)
-		reduction := 0
-		if srcLen > 0 {
-			reduction = (srcLen - dstLen) * 100 / srcLen
-		}
-		fmt.Fprintf(os.Stderr, "html-convert: %d → %d bytes (%d%% reduction)\n", srcLen, dstLen, reduction)
-		text = converted
-	}
-
-	// --sanitize: strip invisible Unicode and NFKC-normalize before summarization.
-	if *sanitizeFlag {
-		stripped := tldt.SanitizeAll(text)
-		if stripped != text {
-			if inv := tldt.ReportInvisibles(text); len(inv) > 0 {
-				fmt.Fprintf(os.Stderr, "sanitize: removed %d invisible codepoint(s)\n", len(inv))
-			}
-		}
-		text = stripped
-	}
-
-	// --sanitize-pii: redact PII and secrets before summarization.
-	// Implies detection: redaction count always reported to stderr.
-	// --sanitize-pii and --sanitize stack independently.
-	if *sanitizePII {
-		redacted, findings := tldt.SanitizePII(text)
-		fmt.Fprintf(os.Stderr, "pii-detect: %d redaction(s) applied\n", len(findings))
-		text = redacted
-	}
-
-	// --detect-pii: advisory PII scan; never modifies text or blocks summarization.
-	// When --sanitize-pii is also set, this block runs on the already-redacted text — findings will be empty
-	// (since redaction already replaced matches). This is correct behavior: detection post-redaction is safe.
-	if *detectPII {
-		findings := tldt.DetectPII(text)
-		if len(findings) == 0 {
-			fmt.Fprintln(os.Stderr, "pii-detect: no findings")
-		} else {
-			fmt.Fprintf(os.Stderr, "pii-detect: %d finding(s)\n", len(findings))
-			for _, f := range findings {
-				fmt.Fprintf(os.Stderr, "pii-detect: WARNING — [%s] %s (line %d)\n", f.Pattern, f.Excerpt, f.Line)
-			}
-		}
-	}
-
-	// --detect-injection: report pattern, encoding, and invisible-char findings to stderr.
-	if *detectInjection {
-		if inv := tldt.ReportInvisibles(text); len(inv) > 0 {
-			fmt.Fprintf(os.Stderr, "injection-detect: %d invisible Unicode codepoint(s) found\n", len(inv))
-			for _, r := range inv {
-				fmt.Fprintf(os.Stderr, "  offset %d: U+%04X %s (%s)\n", r.Offset, r.Rune, r.Name, r.Category)
-			}
-		}
-		dresult, err := tldt.Detect(text, tldt.DetectOptions{
-			OutlierThreshold: *injectionThreshold,
-		})
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "detection error:", err)
-			os.Exit(1)
-		}
-		report := dresult.Report
-		// Outlier findings use a dissimilarity score on a different scale than
-		// pattern confidence, so report them in their own block.
-		var patternFindings, outlierFindings []tldt.Finding
-		for _, f := range report.Findings {
-			if f.Category == "outlier" {
-				outlierFindings = append(outlierFindings, f)
-			} else {
-				patternFindings = append(patternFindings, f)
-			}
-		}
-		if len(patternFindings) > 0 {
-			fmt.Fprintf(os.Stderr, "injection-detect: %d finding(s), max confidence %.2f\n", len(patternFindings), report.MaxScore)
-			for _, f := range patternFindings {
-				fmt.Fprintf(os.Stderr, "  [%s] %s (score=%.2f): %s\n", f.Category, f.Pattern, f.Score, f.Excerpt)
-			}
-			if report.Suspicious {
-				fmt.Fprintln(os.Stderr, "injection-detect: WARNING — input flagged as suspicious")
-			}
-		} else {
-			fmt.Fprintln(os.Stderr, "injection-detect: no findings")
-		}
-		if len(outlierFindings) > 0 {
-			fmt.Fprintf(os.Stderr, "injection-detect: %d outlier sentence(s) above threshold %.2f\n", len(outlierFindings), *injectionThreshold)
-			for _, f := range outlierFindings {
-				fmt.Fprintf(os.Stderr, "  [outlier] sentence %d (score=%.2f): %s\n", f.Sentence, f.Score, f.Excerpt)
-			}
-		}
-	}
+	text = runSecurityStages(text, securityOpts{
+		fromHTML:           *fromHTML,
+		sanitize:           *sanitizeFlag,
+		sanitizePII:        *sanitizePII,
+		detectPII:          *detectPII,
+		detectInjection:    *detectInjection,
+		injectionThreshold: *injectionThreshold,
+	})
 
 	const defaultSentenceCap = 2000
 	if !*noCap {
 		text = applySentenceCap(text, defaultSentenceCap)
 	}
 
-	s, err := tldt.NewSummarizer(effectiveAlgorithm)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-
 	charsIn := len(text)
-	var result []string
-	if *explain {
-		if ex, ok := s.(tldt.Explainer); ok {
-			var info *tldt.ExplainInfo
-			var err2 error
-			result, info, err2 = ex.SummarizeExplain(text, effectiveSentences)
-			if err2 != nil {
-				fmt.Fprintln(os.Stderr, "summarization failed:", err2)
-				os.Exit(1)
-			}
-			if info != nil {
-				fmt.Fprint(os.Stderr, info.Format())
-			}
-		} else {
-			// Graph or future algorithms without Explainer: fall back to normal summarize
-			fmt.Fprintf(os.Stderr, "note: --explain not supported for algorithm %q; running without diagnostics\n", effectiveAlgorithm)
-			var err2 error
-			result, err2 = s.Summarize(text, effectiveSentences)
-			if err2 != nil {
-				fmt.Fprintln(os.Stderr, "summarization failed:", err2)
-				os.Exit(1)
-			}
-		}
-	} else {
-		var err2 error
-		result, err2 = s.Summarize(text, effectiveSentences)
-		if err2 != nil {
-			fmt.Fprintln(os.Stderr, "summarization failed:", err2)
-			os.Exit(1)
-		}
-	}
+	result := summarize(effectiveAlgorithm, text, effectiveSentences, *explain)
 
 	// ROUGE evaluation against reference file (if --rouge provided)
 	if *rouge != "" {
@@ -399,7 +184,163 @@ func main() {
 		CompressionRatio:   float64(tokIn-tokOut) / float64(tokIn+1), // +1 guards divide-by-zero
 	}
 
-	switch effectiveFormat {
+	writeOutput(effectiveFormat, result, meta, *paragraphs)
+}
+
+// securityOpts selects which preprocessing/advisory stages runSecurityStages runs.
+type securityOpts struct {
+	fromHTML           bool
+	sanitize           bool
+	sanitizePII        bool
+	detectPII          bool
+	detectInjection    bool
+	injectionThreshold float64
+}
+
+// runSecurityStages applies the requested HTML-conversion, sanitization, and
+// PII/injection stages to text in order, reporting to stderr, and returns the
+// possibly-modified text. detect-pii and detect-injection are advisory and leave
+// the text unchanged. Exits the process on HTML conversion or detection failure.
+func runSecurityStages(text string, o securityOpts) string {
+	// --from-html: convert HTML to Markdown before processing.
+	if o.fromHTML {
+		converted, err := tldt.ConvertHTML(text, tldt.HTMLConvertOptions{
+			ExtractContent: true,
+			IncludeTitle:   true,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "html-convert: %v\n", err)
+			os.Exit(1)
+		}
+		srcLen := len(text)
+		dstLen := len(converted)
+		reduction := 0
+		if srcLen > 0 {
+			reduction = (srcLen - dstLen) * 100 / srcLen
+		}
+		fmt.Fprintf(os.Stderr, "html-convert: %d → %d bytes (%d%% reduction)\n", srcLen, dstLen, reduction)
+		text = converted
+	}
+
+	// --sanitize: strip invisible Unicode and NFKC-normalize before summarization.
+	if o.sanitize {
+		stripped := tldt.SanitizeAll(text)
+		if stripped != text {
+			if inv := tldt.ReportInvisibles(text); len(inv) > 0 {
+				fmt.Fprintf(os.Stderr, "sanitize: removed %d invisible codepoint(s)\n", len(inv))
+			}
+		}
+		text = stripped
+	}
+
+	// --sanitize-pii: redact PII and secrets before summarization. Implies
+	// detection: redaction count always reported. Stacks with --sanitize.
+	if o.sanitizePII {
+		redacted, findings := tldt.SanitizePII(text)
+		fmt.Fprintf(os.Stderr, "pii-detect: %d redaction(s) applied\n", len(findings))
+		text = redacted
+	}
+
+	// --detect-pii: advisory PII scan; never modifies text. When --sanitize-pii is
+	// also set this runs on already-redacted text, so findings will be empty.
+	if o.detectPII {
+		findings := tldt.DetectPII(text)
+		if len(findings) == 0 {
+			fmt.Fprintln(os.Stderr, "pii-detect: no findings")
+		} else {
+			fmt.Fprintf(os.Stderr, "pii-detect: %d finding(s)\n", len(findings))
+			for _, f := range findings {
+				fmt.Fprintf(os.Stderr, "pii-detect: WARNING — [%s] %s (line %d)\n", f.Pattern, f.Excerpt, f.Line)
+			}
+		}
+	}
+
+	// --detect-injection: report pattern, encoding, and invisible-char findings.
+	if o.detectInjection {
+		reportInjection(text, o.injectionThreshold)
+	}
+	return text
+}
+
+// reportInjection runs invisible-character and Detect analysis on text and writes
+// the findings to stderr, splitting pattern findings from outlier sentences.
+func reportInjection(text string, threshold float64) {
+	if inv := tldt.ReportInvisibles(text); len(inv) > 0 {
+		fmt.Fprintf(os.Stderr, "injection-detect: %d invisible Unicode codepoint(s) found\n", len(inv))
+		for _, r := range inv {
+			fmt.Fprintf(os.Stderr, "  offset %d: U+%04X %s (%s)\n", r.Offset, r.Rune, r.Name, r.Category)
+		}
+	}
+	dresult, err := tldt.Detect(text, tldt.DetectOptions{OutlierThreshold: threshold})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "detection error:", err)
+		os.Exit(1)
+	}
+	report := dresult.Report
+	// Outlier findings use a dissimilarity score on a different scale than
+	// pattern confidence, so report them in their own block.
+	var patternFindings, outlierFindings []tldt.Finding
+	for _, f := range report.Findings {
+		if f.Category == "outlier" {
+			outlierFindings = append(outlierFindings, f)
+		} else {
+			patternFindings = append(patternFindings, f)
+		}
+	}
+	if len(patternFindings) > 0 {
+		fmt.Fprintf(os.Stderr, "injection-detect: %d finding(s), max confidence %.2f\n", len(patternFindings), report.MaxScore)
+		for _, f := range patternFindings {
+			fmt.Fprintf(os.Stderr, "  [%s] %s (score=%.2f): %s\n", f.Category, f.Pattern, f.Score, f.Excerpt)
+		}
+		if report.Suspicious {
+			fmt.Fprintln(os.Stderr, "injection-detect: WARNING — input flagged as suspicious")
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "injection-detect: no findings")
+	}
+	if len(outlierFindings) > 0 {
+		fmt.Fprintf(os.Stderr, "injection-detect: %d outlier sentence(s) above threshold %.2f\n", len(outlierFindings), threshold)
+		for _, f := range outlierFindings {
+			fmt.Fprintf(os.Stderr, "  [outlier] sentence %d (score=%.2f): %s\n", f.Sentence, f.Score, f.Excerpt)
+		}
+	}
+}
+
+// summarize builds the summarizer for algo and returns the summary. With explain
+// set it prints algorithm diagnostics to stderr when the algorithm supports them,
+// otherwise notes the fallback. Exits the process on failure.
+func summarize(algo, text string, n int, explain bool) []string {
+	s, err := tldt.NewSummarizer(algo)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if explain {
+		if ex, ok := s.(tldt.Explainer); ok {
+			result, info, err := ex.SummarizeExplain(text, n)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "summarization failed:", err)
+				os.Exit(1)
+			}
+			if info != nil {
+				fmt.Fprint(os.Stderr, info.Format())
+			}
+			return result
+		}
+		// Graph or future algorithms without Explainer: fall back to normal summarize.
+		fmt.Fprintf(os.Stderr, "note: --explain not supported for algorithm %q; running without diagnostics\n", algo)
+	}
+	result, err := s.Summarize(text, n)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "summarization failed:", err)
+		os.Exit(1)
+	}
+	return result
+}
+
+// writeOutput renders result to stdout in the requested format.
+func writeOutput(format string, result []string, meta formatter.SummaryMeta, paragraphs int) {
+	switch format {
 	case "json":
 		out, err := formatter.FormatJSON(result, meta)
 		if err != nil {
@@ -410,12 +351,102 @@ func main() {
 	case "markdown":
 		fmt.Print(formatter.FormatMarkdown(result, meta))
 	default: // "text" and anything unrecognised
-		if *paragraphs > 0 {
-			fmt.Println(groupIntoParagraphs(result, *paragraphs))
+		if paragraphs > 0 {
+			fmt.Println(groupIntoParagraphs(result, paragraphs))
 		} else {
 			fmt.Println(formatter.FormatText(result))
 		}
 	}
+}
+
+// usage prints the full help text to stderr and exits. Wired as flag.Usage.
+func usage() {
+	fmt.Fprintln(os.Stderr, "tldt - Text summarization and security preprocessing for LLM input")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "USAGE:")
+	fmt.Fprintln(os.Stderr, "  tldt [options] [text...]")
+	fmt.Fprintln(os.Stderr, "  cat file.txt | tldt [options]")
+	fmt.Fprintln(os.Stderr, "  tldt -f article.txt [options]")
+	fmt.Fprintln(os.Stderr, "  tldt --url https://example.com/article [options]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "CORE OPTIONS:")
+	fmt.Fprintln(os.Stderr, "  -f, -file string       Read input from file")
+	fmt.Fprintln(os.Stderr, "  --url string           Fetch and summarize URL content")
+	fmt.Fprintln(os.Stderr, "  --algorithm string     Summarization algorithm: lexrank (default), textrank, graph, ensemble")
+	fmt.Fprintln(os.Stderr, "  --sentences int        Number of output sentences (default: 5)")
+	fmt.Fprintln(os.Stderr, "  --level string         Compression preset: aggressive (3), standard (5), lite (10)")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "SECURITY OPTIONS:")
+	fmt.Fprintln(os.Stderr, "  --sanitize             Strip invisible Unicode characters and NFKC-normalize")
+	fmt.Fprintln(os.Stderr, "  --detect-injection     Report prompt injection patterns to stderr (advisory)")
+	fmt.Fprintln(os.Stderr, "  --injection-threshold float  Outlier detection threshold (default: 0.99)")
+	fmt.Fprintln(os.Stderr, "  --detect-pii           Report PII/secrets (emails, API keys, JWTs, credit cards)")
+	fmt.Fprintln(os.Stderr, "  --sanitize-pii         Redact PII before summarization")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "FORMAT OPTIONS:")
+	fmt.Fprintln(os.Stderr, "  --format string        Output format: text (default), json, markdown")
+	fmt.Fprintln(os.Stderr, "  --verbose              Print token statistics to stderr")
+	fmt.Fprintln(os.Stderr, "  --paragraphs int       Group output sentences into N paragraphs")
+	fmt.Fprintln(os.Stderr, "  --no-cap               Disable 2000-sentence processing limit")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "HTML PROCESSING:")
+	fmt.Fprintln(os.Stderr, "  --from-html            Convert HTML input to Markdown before summarization")
+	fmt.Fprintln(os.Stderr, "                        (uses readability extraction + html-to-markdown)")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "CONFIGURATION:")
+	fmt.Fprintln(os.Stderr, "  --print-threshold      Print hook token threshold from config and exit")
+	fmt.Fprintln(os.Stderr, "  --install-skill        Install Claude Code skill and auto-trigger hook")
+	fmt.Fprintln(os.Stderr, "  --skill-dir string     Override skill install directory")
+	fmt.Fprintln(os.Stderr, "  --target string        Install target: claude|cursor|opencode|agents|all")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "EMBEDDED AI ASSISTANT SKILLS:")
+	fmt.Fprintln(os.Stderr, "  The binary contains embedded skill templates for AI assistants.")
+	fmt.Fprintln(os.Stderr, "  Skills are extracted and installed when you run --install-skill.")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  SKILL.md - Manual /tldt command (all assistants)")
+	fmt.Fprintln(os.Stderr, "    - Claude Code: ~/.claude/skills/tldt/SKILL.md")
+	fmt.Fprintln(os.Stderr, "    - OpenCode:    ~/.config/opencode/skills/tldt/SKILL.md")
+	fmt.Fprintln(os.Stderr, "    - Cursor:      ~/.cursor/skills/tldt/SKILL.md")
+	fmt.Fprintln(os.Stderr, "    - Agents:      ~/.agents/skills/tldt/SKILL.md")
+	fmt.Fprintln(os.Stderr, "    - Usage: Type /tldt <long text> inside the assistant")
+	fmt.Fprintln(os.Stderr, "    - Returns: Token savings + extractive summary")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  tldt-hook.sh - Auto-trigger hook (Claude Code only)")
+	fmt.Fprintln(os.Stderr, "    - Location: ~/.claude/hooks/tldt-hook.sh")
+	fmt.Fprintln(os.Stderr, "    - Auto-summarizes prompts exceeding threshold (default: 2000 tokens)")
+	fmt.Fprintln(os.Stderr, "    - Runs security preprocessing: --sanitize --detect-injection --detect-pii")
+	fmt.Fprintln(os.Stderr, "    - Output guard: re-runs detection on summary before context injection")
+	fmt.Fprintln(os.Stderr, "    - Configurable via ~/.tldt.toml [hook] threshold = N")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "INSTALLATION:")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  Auto-detect (installs to all assistants with existing directories):")
+	fmt.Fprintln(os.Stderr, "    tldt --install-skill")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  Target specific assistant (auto-creates directory if needed):")
+	fmt.Fprintln(os.Stderr, "    tldt --install-skill --target claude    # SKILL.md + hook + settings.json")
+	fmt.Fprintln(os.Stderr, "    tldt --install-skill --target opencode  # SKILL.md only (auto-creates dir)")
+	fmt.Fprintln(os.Stderr, "    tldt --install-skill --target cursor    # SKILL.md only (auto-creates dir)")
+	fmt.Fprintln(os.Stderr, "    tldt --install-skill --target agents    # SKILL.md only (auto-creates dir)")
+	fmt.Fprintln(os.Stderr, "    tldt --install-skill --target all       # All assistants")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  Notes:")
+	fmt.Fprintln(os.Stderr, "    - Only Claude Code supports auto-trigger hooks (UserPromptSubmit)")
+	fmt.Fprintln(os.Stderr, "    - Other assistants get SKILL.md only (manual /tldt command)")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "EXAMPLES:")
+	fmt.Fprintln(os.Stderr, "  cat article.txt | tldt")
+	fmt.Fprintln(os.Stderr, "  tldt -f transcript.txt --algorithm textrank --sentences 10")
+	fmt.Fprintln(os.Stderr, "  tldt --url https://example.com/article --sanitize --detect-pii")
+	fmt.Fprintln(os.Stderr, "  curl -s https://example.com | tldt --from-html --sentences 3")
+	fmt.Fprintln(os.Stderr, "  tldt \"Long text to summarize\" --format json --verbose")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "CONFIG FILE:")
+	fmt.Fprintln(os.Stderr, "  ~/.tldt.toml - Default settings (algorithm, sentences, format, level)")
+	fmt.Fprintln(os.Stderr, "               - Hook threshold: [hook] section with threshold = N")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "For more information: https://github.com/gleicon/tldt")
+	os.Exit(0)
 }
 
 func formatTokens(n int) string {
