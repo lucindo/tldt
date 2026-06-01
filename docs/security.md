@@ -21,19 +21,22 @@ injection-detect: WARNING — input flagged as suspicious
 
 ## LLM02 — Sensitive Information Disclosure
 
-**Threat:** Source text may contain PII, API keys, JWTs, or credit card numbers. If these survive into a summary, they leak into the AI model's context — and potentially into logs, caches, or downstream responses.
+**Threat:** Source text may contain PII, API keys, tokens, JWTs, SSNs, or credit card numbers. If these survive into a summary, they leak into the AI model's context — and potentially into logs, caches, or downstream responses.
 
-**Mitigation (Phase 9):** `--detect-pii` scans for email addresses, API key prefixes (Bearer, sk-, AIza, AKIA), JWTs, and credit card sequences. `--sanitize-pii` redacts matches with `[REDACTED:<type>]` placeholders before summarization. Detection reports to stderr; redaction count reported.
+**Mitigation:** `--detect-pii` scans for email addresses, API key prefixes (Bearer, sk-, AIza, AKIA), GitHub/Slack tokens, PEM private keys, JWTs, SSNs, and Luhn-valid credit cards. `--sanitize-pii` redacts those matches — plus high-entropy base64 key material (e.g. prefix-less secret keys) — with `[REDACTED:<type>]` placeholders before summarization. Detection reports to stderr; redaction count reported.
 
-**Example (Phase 9):**
+The high-entropy gate favors over-redaction: it can also redact dense base64 that is *not* secret — content hashes, signatures, key fingerprints — as `[REDACTED:secret]`, silently dropping it from the summary. This is the intended trade-off for an opt-in redactor (redacting a hash is safer than leaking a key); use `--detect-pii` to report the same matches without modifying text if you need to inspect first.
+
+**Example:**
 
 ```bash
-$ echo "Contact alice@example.com, key sk-abc123xyz" | tldt --detect-pii
+$ echo "Contact alice@example.com, key sk-abc123xyz4567890abcd" | tldt --detect-pii
 pii-detect: 2 finding(s)
-  [email] alice@example.com (line 1)
-  [api-key] sk-abc123xyz (line 1)
-pii-detect: WARNING — PII detected in input
+pii-detect: WARNING — [api-key] sk-abc123xyz... (line 1)
+pii-detect: WARNING — [email] alice@exampl... (line 1)
 ```
+
+Excerpts are truncated to ~12 characters so the secret itself is not echoed in full.
 
 ## LLM05 — Improper Output Handling
 

@@ -347,7 +347,7 @@
         <pre><span class="cm">// Full pipeline for untrusted input before LLM context</span>
 <span class="kw">result</span>, <span class="kw">err</span> := <span class="kw">tldt</span>.<span class="fn">Pipeline</span>(<span class="s">"untrusted text"</span>, <span class="kw">tldt</span>.<span class="ty">PipelineOptions</span>{
     <span class="kw">Sanitize</span>:    <span class="num">true</span>,  <span class="cm">// Strip invisible Unicode</span>
-    <span class="kw">SanitizePII</span>: <span class="num">true</span>,  <span class="cm">// Redact emails, API keys, JWTs</span>
+    <span class="kw">SanitizePII</span>: <span class="num">true</span>,  <span class="cm">// Redact PII, keys, tokens, and high-entropy secrets</span>
     <span class="kw">DetectPII</span>:   <span class="num">true</span>,  <span class="cm">// Report PII findings</span>
     <span class="kw">Detect</span>: <span class="kw">tldt</span>.<span class="ty">DetectOptions</span>{
         <span class="kw">OutlierThreshold</span>: <span class="num">0.85</span>,
@@ -445,7 +445,7 @@
         <div class="api-sig">func DetectPII(text string) []PIIFinding</div>
       </div>
       <div class="api-body">
-        <p>Scans text for PII/secrets: emails, API keys (Bearer, sk-, AIza, AKIA), JWTs, credit cards. Returns findings with pattern type, excerpt, and line number.</p>
+        <p>Scans text for PII/secrets: emails, API keys (Bearer, sk-, AIza, AKIA), GitHub/Slack tokens, PEM private keys, JWTs, SSNs, credit cards. Returns findings with pattern type, excerpt, and line number.</p>
       </div>
     </div>
 
@@ -455,7 +455,7 @@
         <div class="api-sig">func SanitizePII(text string) (string, []PIIFinding)</div>
       </div>
       <div class="api-body">
-        <p>Redacts PII matches with [REDACTED:pattern] placeholders. Returns redacted text and findings.</p>
+        <p>Redacts PII matches with [REDACTED:pattern] placeholders. Returns redacted text and findings. The high-entropy gate favors over-redaction: dense base64 that is not secret (content hashes, signatures, key fingerprints) can also be redacted as [REDACTED:secret]. Use DetectPII to inspect matches without modifying text.</p>
       </div>
     </div>
 

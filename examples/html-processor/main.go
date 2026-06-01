@@ -13,6 +13,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -48,7 +49,7 @@ func main() {
 
 		// Fetch the URL
 		fmt.Printf("Fetching: %s\n", url)
-		result, err := tldt.Fetch(url, tldt.FetchOptions{})
+		result, err := tldt.Fetch(context.Background(), url, tldt.FetchOptions{})
 		if err != nil {
 			log.Fatalf("Fetch failed: %v", err)
 		}

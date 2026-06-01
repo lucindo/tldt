@@ -1,8 +1,10 @@
 package fetcher
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,10 +24,28 @@ func withLookup(fn func(string) ([]string, error), test func()) {
 	test()
 }
 
-// publicLookup always returns a public IP, bypassing the SSRF pre-check.
-// Use this for httptest-based tests that need to exercise non-SSRF behavior.
-func publicLookup(host string) ([]string, error) {
-	return []string{"93.184.216.34"}, nil
+// withBlockIP temporarily overrides the package-level blockIP for test isolation.
+func withBlockIP(fn func(string, []string) error, test func()) {
+	orig := blockIP
+	blockIP = fn
+	defer func() { blockIP = orig }()
+	test()
+}
+
+// allowAllIPs disables IP validation so httptest servers (which bind to a
+// loopback address that the real guard would block) are reachable. Use for
+// tests exercising non-SSRF behavior.
+func allowAllIPs(host string, addrs []string) error { return nil }
+
+// blockPrivateOnly blocks RFC 1918 IPs but permits loopback, so an httptest
+// server (loopback) stays reachable while a redirect to a private IP is caught.
+func blockPrivateOnly(host string, addrs []string) error {
+	for _, a := range addrs {
+		if ip := net.ParseIP(a); ip != nil && ip.IsPrivate() {
+			return fmt.Errorf("host %q resolves to private IP %s: %w", host, a, ErrSSRFBlocked)
+		}
+	}
+	return nil
 }
 
 // privateLookup returns a lookup function that always returns the given private IP.
@@ -39,7 +59,7 @@ func privateLookup(ip string) func(string) ([]string, error) {
 func TestFetch_OK(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<html><body>
+		_, _ = fmt.Fprint(w, `<html><body>
 			<nav>Navigation junk</nav>
 			<article>
 			  <p>Alice discovered that the method worked well on long documents.
@@ -51,16 +71,22 @@ func TestFetch_OK(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	withLookup(publicLookup, func() {
-		text, err := Fetch(ts.URL, testTimeout, testMaxBytes)
+	withBlockIP(allowAllIPs, func() {
+		res, err := Fetch(context.Background(), ts.URL, testTimeout, testMaxBytes)
 		if err != nil {
 			t.Fatalf("Fetch: unexpected error: %v", err)
 		}
-		if strings.TrimSpace(text) == "" {
+		if strings.TrimSpace(res.Text) == "" {
 			t.Error("Fetch: expected non-empty text content, got empty string")
 		}
-		if strings.Contains(text, "Navigation junk") {
-			t.Errorf("Fetch: nav junk leaked into text content: %q", text)
+		if strings.Contains(res.Text, "Navigation junk") {
+			t.Errorf("Fetch: nav junk leaked into text content: %q", res.Text)
+		}
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("Fetch: StatusCode = %d, want 200", res.StatusCode)
+		}
+		if !strings.Contains(res.ContentType, "text/html") {
+			t.Errorf("Fetch: ContentType = %q, want text/html", res.ContentType)
 		}
 	})
 }
@@ -71,10 +97,13 @@ func TestFetch_404(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	withLookup(publicLookup, func() {
-		_, err := Fetch(ts.URL, testTimeout, testMaxBytes)
+	withBlockIP(allowAllIPs, func() {
+		_, err := Fetch(context.Background(), ts.URL, testTimeout, testMaxBytes)
 		if err == nil {
 			t.Error("Fetch: expected error for 404 response, got nil")
+		}
+		if !errors.Is(err, ErrHTTPError) {
+			t.Errorf("Fetch: expected ErrHTTPError for non-2xx, got %v", err)
 		}
 		if !strings.Contains(err.Error(), "404") {
 			t.Errorf("Fetch: expected '404' in error message, got %q", err.Error())
@@ -89,24 +118,27 @@ func TestFetch_Redirect(t *testing.T) {
 	})
 	mux.HandleFunc("/new", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `<html><body><article><p>Redirected content successfully arrived here.</p></article></body></html>`)
+		_, _ = fmt.Fprint(w, `<html><body><article><p>Redirected content successfully arrived here.</p></article></body></html>`)
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	withLookup(publicLookup, func() {
-		text, err := Fetch(ts.URL+"/old", testTimeout, testMaxBytes)
+	withBlockIP(allowAllIPs, func() {
+		res, err := Fetch(context.Background(), ts.URL+"/old", testTimeout, testMaxBytes)
 		if err != nil {
 			t.Fatalf("Fetch redirect: unexpected error: %v", err)
 		}
-		if !strings.Contains(text, "Redirected content") {
-			t.Errorf("Fetch redirect: expected 'Redirected content' in text, got %q", text)
+		if !strings.Contains(res.Text, "Redirected content") {
+			t.Errorf("Fetch redirect: expected 'Redirected content' in text, got %q", res.Text)
+		}
+		if !strings.Contains(res.FinalURL, "/new") {
+			t.Errorf("Fetch redirect: FinalURL = %q, want it to end in /new", res.FinalURL)
 		}
 	})
 }
 
 func TestFetch_InvalidScheme(t *testing.T) {
-	_, err := Fetch("file:///etc/passwd", testTimeout, testMaxBytes)
+	_, err := Fetch(context.Background(), "file:///etc/passwd", testTimeout, testMaxBytes)
 	if err == nil {
 		t.Error("Fetch: expected error for file:// scheme, got nil")
 	}
@@ -118,17 +150,51 @@ func TestFetch_InvalidScheme(t *testing.T) {
 func TestFetch_NonHTMLContentType(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/pdf")
-		fmt.Fprint(w, "%PDF-1.4 fake pdf content")
+		_, _ = fmt.Fprint(w, "%PDF-1.4 fake pdf content")
 	}))
 	defer ts.Close()
 
-	withLookup(publicLookup, func() {
-		_, err := Fetch(ts.URL, testTimeout, testMaxBytes)
+	withBlockIP(allowAllIPs, func() {
+		_, err := Fetch(context.Background(), ts.URL, testTimeout, testMaxBytes)
 		if err == nil {
 			t.Error("Fetch: expected error for application/pdf content-type, got nil")
 		}
+		if !errors.Is(err, ErrNonHTML) {
+			t.Errorf("Fetch: expected ErrNonHTML for non-HTML content-type, got %v", err)
+		}
 		if !strings.Contains(err.Error(), "unsupported content type") {
 			t.Errorf("Fetch: expected 'unsupported content type' in error, got %q", err.Error())
+		}
+	})
+}
+
+// TestFetch_MaxBytesCap verifies the maxBytes cap truncates the response body:
+// content that appears only beyond the cap must not survive into the extracted text.
+func TestFetch_MaxBytesCap(t *testing.T) {
+	const marker = "SENTINELPASTCAP" // appears only well beyond the small cap
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Open the document well within the first 64 bytes, then pad far past the
+		// cap before emitting the marker so a truncated read cannot include it.
+		_, _ = fmt.Fprint(w, "<html><body><article><p>Lead. ")
+		_, _ = fmt.Fprint(w, strings.Repeat("padding word here. ", 2000))
+		_, _ = fmt.Fprintf(w, "%s appears only past the byte cap.</p></article></body></html>", marker)
+	}))
+	defer ts.Close()
+
+	const smallCap = 64
+	withBlockIP(allowAllIPs, func() {
+		res, err := Fetch(context.Background(), ts.URL, testTimeout, smallCap)
+		if err != nil {
+			// A tiny cap may yield no extractable article; that is also acceptable
+			// truncation behavior. What must never happen is the marker surviving.
+			if strings.Contains(err.Error(), marker) {
+				t.Fatalf("Fetch: marker leaked into error despite cap: %v", err)
+			}
+			return
+		}
+		if strings.Contains(res.Text, marker) {
+			t.Errorf("Fetch: content beyond maxBytes=%d cap leaked into text (found %q)", smallCap, res.Text)
 		}
 	})
 }
@@ -149,6 +215,16 @@ func TestBlockPrivateIP(t *testing.T) {
 		{"private-192", "internal", []string{"192.168.1.1"}, true},
 		{"link-local", "metadata", []string{"169.254.169.254"}, true},
 		{"cloud-meta-v6", "metadata", []string{"fd00:ec2::254"}, true},
+		// R3 additions: ranges the net.IP helpers do not cover.
+		{"unspecified-v4", "any", []string{"0.0.0.0"}, true},
+		{"unspecified-v6", "any", []string{"::"}, true},
+		{"cgnat", "carrier", []string{"100.64.0.1"}, true},
+		{"benchmark", "bench", []string{"198.18.0.1"}, true},
+		{"nat64", "nat", []string{"64:ff9b::1"}, true},
+		// IPv4-mapped IPv6 is already handled: net.ParseIP normalizes via To4(),
+		// so IsLoopback/IsPrivate catch these without extra code.
+		{"mapped-loopback", "mapped", []string{"::ffff:127.0.0.1"}, true},
+		{"mapped-private", "mapped", []string{"::ffff:10.0.0.1"}, true},
 		{"public-ip", "example.com", []string{"93.184.216.34"}, false},
 		{"nil-parse", "bad", []string{"not-an-ip"}, false},
 	}
@@ -167,7 +243,7 @@ func TestBlockPrivateIP(t *testing.T) {
 
 func TestFetch_SSRFBlockPrivateIP(t *testing.T) {
 	withLookup(privateLookup("192.168.1.1"), func() {
-		_, err := Fetch("http://example.com/admin", testTimeout, testMaxBytes)
+		_, err := Fetch(context.Background(), "http://example.com/admin", testTimeout, testMaxBytes)
 		if err == nil {
 			t.Fatal("expected SSRF block error for private IP, got nil")
 		}
@@ -179,7 +255,7 @@ func TestFetch_SSRFBlockPrivateIP(t *testing.T) {
 
 func TestFetch_SSRFBlockLoopback(t *testing.T) {
 	withLookup(privateLookup("127.0.0.1"), func() {
-		_, err := Fetch("http://example.com/secret", testTimeout, testMaxBytes)
+		_, err := Fetch(context.Background(), "http://example.com/secret", testTimeout, testMaxBytes)
 		if err == nil {
 			t.Fatal("expected SSRF block on loopback, got nil")
 		}
@@ -191,7 +267,7 @@ func TestFetch_SSRFBlockLoopback(t *testing.T) {
 
 func TestFetch_SSRFBlockCloudMeta(t *testing.T) {
 	withLookup(privateLookup("169.254.169.254"), func() {
-		_, err := Fetch("http://example.com/latest/meta-data/", testTimeout, testMaxBytes)
+		_, err := Fetch(context.Background(), "http://example.com/latest/meta-data/", testTimeout, testMaxBytes)
 		if err == nil {
 			t.Fatal("expected SSRF block on cloud metadata IP, got nil")
 		}
@@ -201,48 +277,177 @@ func TestFetch_SSRFBlockCloudMeta(t *testing.T) {
 	})
 }
 
-// TestFetch_SSRFBlockViaRedirect tests that SSRF is detected on redirect hops.
-// The initial lookup returns a public IP (passes pre-check), but the redirect
-// lookup returns a private IP (triggering ErrSSRFBlocked in CheckRedirect).
+// TestFetch_SSRFBlockViaRedirect verifies SSRF is caught on a redirect hop.
+// The initial host (the loopback httptest server) is permitted, but the redirect
+// target resolves to a private IP and must be blocked at dial time.
 func TestFetch_SSRFBlockViaRedirect(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/target", http.StatusMovedPermanently)
+		http.Redirect(w, r, "http://internal.invalid/target", http.StatusMovedPermanently)
 	}))
 	defer ts.Close()
 
-	callCount := 0
+	// Resolve the redirect target to a private IP; the test server resolves to
+	// its real loopback address. blockPrivateOnly permits loopback but blocks
+	// the private redirect, so the hop is rejected at dial time.
 	withLookup(func(host string) ([]string, error) {
-		callCount++
-		if callCount == 1 {
-			return []string{"93.184.216.34"}, nil // initial: public — passes pre-check
+		if host == "internal.invalid" {
+			return []string{"10.0.0.1"}, nil
 		}
-		return []string{"10.0.0.1"}, nil // redirect: private — blocked by CheckRedirect
+		return []string{"127.0.0.1"}, nil
 	}, func() {
-		_, err := Fetch(ts.URL+"/start", testTimeout, testMaxBytes)
-		if err == nil {
-			t.Fatal("expected SSRF block on redirect to private IP, got nil")
-		}
-		if !errors.Is(err, ErrSSRFBlocked) && !errors.Is(err, ErrRedirectLimit) {
-			t.Errorf("expected ErrSSRFBlocked or ErrRedirectLimit, got: %v", err)
-		}
+		withBlockIP(blockPrivateOnly, func() {
+			_, err := Fetch(context.Background(), ts.URL+"/start", testTimeout, testMaxBytes)
+			if err == nil {
+				t.Fatal("expected SSRF block on redirect to private IP, got nil")
+			}
+			if !errors.Is(err, ErrSSRFBlocked) {
+				t.Errorf("expected ErrSSRFBlocked, got: %v", err)
+			}
+		})
 	})
 }
 
 // TestFetch_RedirectLimitExceeded tests that redirect chains > 5 hops are rejected.
-// Uses publicLookup so the SSRF pre-check passes and the redirect cap is exercised.
+// allowAllIPs permits the loopback test server so the redirect cap is exercised.
 func TestFetch_RedirectLimitExceeded(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, r.URL.String(), http.StatusMovedPermanently)
 	}))
 	defer ts.Close()
 
-	withLookup(publicLookup, func() {
-		_, err := Fetch(ts.URL, testTimeout, testMaxBytes)
+	withBlockIP(allowAllIPs, func() {
+		_, err := Fetch(context.Background(), ts.URL, testTimeout, testMaxBytes)
 		if err == nil {
 			t.Fatal("expected redirect limit error, got nil")
 		}
 		if !errors.Is(err, ErrRedirectLimit) {
 			t.Errorf("expected ErrRedirectLimit, got: %v", err)
+		}
+	})
+}
+
+// TestSafeDialContext_BlocksResolvedPrivateIP pins the DNS-rebinding fix: the
+// dial guard validates the IP it is about to connect to and refuses to dial a
+// host that resolves to a private address. Because validation and connection
+// share one resolution, a rebinding response cannot slip a private IP past the
+// check.
+func TestSafeDialContext_BlocksResolvedPrivateIP(t *testing.T) {
+	withLookup(privateLookup("10.0.0.1"), func() {
+		_, err := safeDialContext(context.Background(), "tcp", "rebind.invalid:80")
+		if !errors.Is(err, ErrSSRFBlocked) {
+			t.Errorf("safeDialContext should block a host resolving to a private IP, got %v", err)
+		}
+	})
+}
+
+func TestFetchRaw_ReturnsRawBody(t *testing.T) {
+	const payload = `{"openapi":"3.0.0","info":{"title":"Demo"}}`
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, payload)
+	}))
+	defer ts.Close()
+
+	withBlockIP(allowAllIPs, func() {
+		body, meta, err := FetchRaw(context.Background(), ts.URL, testTimeout, testMaxBytes)
+		if err != nil {
+			t.Fatalf("FetchRaw: unexpected error: %v", err)
+		}
+		// Unlike Fetch, no content-type gate and no extraction: the body is verbatim.
+		if string(body) != payload {
+			t.Errorf("FetchRaw: body = %q, want %q", body, payload)
+		}
+		if meta.StatusCode != http.StatusOK {
+			t.Errorf("FetchRaw: StatusCode = %d, want 200", meta.StatusCode)
+		}
+		if !strings.Contains(meta.ContentType, "application/json") {
+			t.Errorf("FetchRaw: ContentType = %q, want application/json", meta.ContentType)
+		}
+		if meta.Text != "" {
+			t.Errorf("FetchRaw: Text should be empty (raw mode), got %q", meta.Text)
+		}
+	})
+}
+
+func TestFetchRaw_RejectsNon2xx(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	withBlockIP(allowAllIPs, func() {
+		if _, _, err := FetchRaw(context.Background(), ts.URL, testTimeout, testMaxBytes); !errors.Is(err, ErrHTTPError) {
+			t.Errorf("FetchRaw: expected ErrHTTPError for 404, got %v", err)
+		}
+	})
+}
+
+// TestFetchRaw_SSRFBlocksResolvedPrivateIP pins that FetchRaw inherits the same
+// dial-time SSRF guard as Fetch — the reason the example switched off its own
+// unprotected http.Client.
+func TestFetchRaw_SSRFBlocksResolvedPrivateIP(t *testing.T) {
+	withLookup(privateLookup("10.0.0.1"), func() {
+		_, _, err := FetchRaw(context.Background(), "http://rebind.invalid/swagger.json", testTimeout, testMaxBytes)
+		if !errors.Is(err, ErrSSRFBlocked) {
+			t.Errorf("FetchRaw must enforce SSRF on the resolved IP, got %v", err)
+		}
+	})
+}
+
+func TestFetchRaw_MaxBytesCap(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, strings.Repeat("A", 10000))
+	}))
+	defer ts.Close()
+
+	const smallCap = 128
+	withBlockIP(allowAllIPs, func() {
+		body, _, err := FetchRaw(context.Background(), ts.URL, testTimeout, smallCap)
+		if err != nil {
+			t.Fatalf("FetchRaw: unexpected error: %v", err)
+		}
+		if int64(len(body)) > smallCap {
+			t.Errorf("FetchRaw: body len = %d exceeds cap %d", len(body), smallCap)
+		}
+	})
+}
+
+// TestFetch_NonPositiveMaxBytes pins the G1 precondition: a non-positive maxBytes
+// is rejected loudly rather than silently bypassing the caller's default-fill.
+func TestFetch_NonPositiveMaxBytes(t *testing.T) {
+	for _, mb := range []int64{0, -1} {
+		if _, err := Fetch(context.Background(), "http://example.com", testTimeout, mb); err == nil {
+			t.Errorf("Fetch(maxBytes=%d): expected error, got nil", mb)
+		}
+		if _, _, err := FetchRaw(context.Background(), "http://example.com", testTimeout, mb); err == nil {
+			t.Errorf("FetchRaw(maxBytes=%d): expected error, got nil", mb)
+		}
+	}
+}
+
+// TestFetch_NonPositiveTimeout pins the G1 precondition on timeout.
+func TestFetch_NonPositiveTimeout(t *testing.T) {
+	if _, err := Fetch(context.Background(), "http://example.com", 0, testMaxBytes); err == nil {
+		t.Error("Fetch(timeout=0): expected error, got nil")
+	}
+}
+
+// TestFetch_ContextCancel pins that a cancelled context aborts the in-flight
+// request instead of running to the client timeout.
+func TestFetch_ContextCancel(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // never respond; wait for client to bail
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled before the call
+
+	withBlockIP(allowAllIPs, func() {
+		_, err := Fetch(ctx, ts.URL, testTimeout, testMaxBytes)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Fetch with cancelled context: expected context.Canceled, got %v", err)
 		}
 	})
 }

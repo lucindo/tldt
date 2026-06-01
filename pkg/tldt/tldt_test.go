@@ -1,6 +1,7 @@
 package tldt
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -93,6 +94,37 @@ func TestDetect_InjectionFound(t *testing.T) {
 	}
 }
 
+func TestDetect_OutlierFinding(t *testing.T) {
+	// One sentence is wildly off-topic relative to the rest. Detect must flag it,
+	// AND a stricter threshold must flag strictly fewer sentences than a permissive
+	// one. The strict-fewer comparison pins that Detect actually honors
+	// opts.OutlierThreshold — if the option were ignored (a fixed default), both
+	// thresholds would return identical findings and this test would fail.
+	text := "The cat sat on the mat. The cat played with yarn. The cat slept all day. " +
+		"Quantum chromodynamics governs the strong nuclear force via gluon exchange."
+	countOutliers := func(threshold float64) int {
+		result, err := Detect(text, DetectOptions{OutlierThreshold: threshold})
+		if err != nil {
+			t.Fatalf("Detect(threshold=%v): unexpected error: %v", threshold, err)
+		}
+		n := 0
+		for _, f := range result.Report.Findings {
+			if f.Category == "outlier" {
+				n++
+			}
+		}
+		return n
+	}
+	strict := countOutliers(0.999)
+	permissive := countOutliers(0.50)
+	if strict < 1 {
+		t.Errorf("Detect(threshold=0.999): expected the off-topic sentence flagged, got 0 outliers")
+	}
+	if permissive <= strict {
+		t.Errorf("Detect: permissive threshold must flag more outliers than strict (option honored); got permissive=%d strict=%d", permissive, strict)
+	}
+}
+
 func TestSanitize_CleanText(t *testing.T) {
 	text := "Hello, world!"
 	cleaned, report, err := Sanitize(text)
@@ -169,8 +201,8 @@ func TestPipeline_NoSanitize(t *testing.T) {
 	if strings.TrimSpace(result.Summary) == "" {
 		t.Error("Pipeline without sanitize: expected non-empty summary")
 	}
-	if result.Redactions != 0 {
-		t.Errorf("Pipeline without sanitize: expected 0 redactions, got %d", result.Redactions)
+	if result.InvisiblesRemoved != 0 || result.PIIRedactions != 0 {
+		t.Errorf("Pipeline without sanitize: expected 0 redactions, got %d invisible, %d PII", result.InvisiblesRemoved, result.PIIRedactions)
 	}
 }
 
@@ -184,7 +216,7 @@ func TestSentinelErrors_Exported(t *testing.T) {
 	}
 }
 
-// --- Edge case integration tests (D-01 coverage) ---
+// --- Edge case integration tests ---
 
 func TestSummarize_EmptyInput(t *testing.T) {
 	result, err := Summarize("", SummarizeOptions{Sentences: 3})
@@ -219,7 +251,7 @@ func TestSummarize_WhitespaceOnly(t *testing.T) {
 func TestFetch_SSRFBlocked(t *testing.T) {
 	// This test verifies the SSRF protection works through the public API
 	// Private IP addresses should be blocked
-	_, err := Fetch("http://192.168.1.1/admin", FetchOptions{})
+	_, err := Fetch(context.Background(), "http://192.168.1.1/admin", FetchOptions{})
 	if err == nil {
 		t.Fatal("Fetch SSRF: expected error for private IP, got nil")
 	}
@@ -234,13 +266,27 @@ func TestFetch_SSRFBlocked(t *testing.T) {
 }
 
 func TestFetch_InvalidURL(t *testing.T) {
-	_, err := Fetch("not-a-valid-url", FetchOptions{})
+	_, err := Fetch(context.Background(), "not-a-valid-url", FetchOptions{})
 	if err == nil {
 		t.Fatal("Fetch invalid URL: expected error, got nil")
 	}
 	// Error should have tldt.Fetch prefix (wrapped context)
 	if !strings.Contains(err.Error(), "tldt.Fetch") {
 		t.Errorf("Fetch invalid URL: expected error with 'tldt.Fetch' prefix, got: %v", err)
+	}
+}
+
+func TestFetchRaw_SSRFBlocked(t *testing.T) {
+	// FetchRaw must carry the same SSRF protection as Fetch through the public API.
+	_, _, err := FetchRaw(context.Background(), "http://192.168.1.1/admin", FetchOptions{})
+	if err == nil {
+		t.Fatal("FetchRaw SSRF: expected error for private IP, got nil")
+	}
+	if !errors.Is(err, ErrSSRFBlocked) {
+		t.Errorf("FetchRaw SSRF: expected errors.Is(err, ErrSSRFBlocked) = true, got false. Error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "tldt.FetchRaw") {
+		t.Errorf("FetchRaw SSRF: expected error to contain 'tldt.FetchRaw', got: %v", err)
 	}
 }
 
@@ -305,8 +351,8 @@ func TestPipeline_ZeroValueOptions(t *testing.T) {
 		t.Error("Pipeline zero-value: expected non-empty summary")
 	}
 	// With zero-value options, Sanitize=false so redactions should be 0
-	if result.Redactions != 0 {
-		t.Errorf("Pipeline zero-value: expected Redactions=0 (sanitize=false), got %d", result.Redactions)
+	if result.InvisiblesRemoved != 0 || result.PIIRedactions != 0 {
+		t.Errorf("Pipeline zero-value: expected 0 redactions (sanitize=false), got %d invisible, %d PII", result.InvisiblesRemoved, result.PIIRedactions)
 	}
 }
 
@@ -326,7 +372,7 @@ func TestSentinelErrors_AllDefined(t *testing.T) {
 	}
 }
 
-// --- PII Detection Tests (Plan 10-01) ---
+// --- PII Detection Tests ---
 
 func TestDetectPII_NoFindings(t *testing.T) {
 	findings := DetectPII("hello world no pii here")
@@ -376,7 +422,7 @@ func TestSanitizePII_EmailRedacted(t *testing.T) {
 	}
 }
 
-// --- Pipeline PII Integration Tests (Plan 10-02) ---
+// --- Pipeline PII Integration Tests ---
 
 func TestPipeline_DetectPII(t *testing.T) {
 	text := "Contact alice@example.com for details.\n" + testArticle
@@ -409,6 +455,49 @@ func TestPipeline_SanitizePII(t *testing.T) {
 	}
 	if strings.TrimSpace(result.Summary) == "" {
 		t.Error("Pipeline SanitizePII: expected non-empty summary")
+	}
+}
+
+// TestPipeline_SanitizeCountsInvisible verifies that Sanitize:true populates
+// InvisiblesRemoved from invisible-char removals: an input with a zero-width
+// space must yield InvisiblesRemoved > 0.
+func TestPipeline_SanitizeCountsInvisible(t *testing.T) {
+	text := "hello\u200bworld. " + testArticle // zero-width space injected
+	result, err := Pipeline(text, PipelineOptions{
+		Sanitize:  true,
+		Summarize: SummarizeOptions{Sentences: 2},
+	})
+	if err != nil {
+		t.Fatalf("Pipeline: unexpected error: %v", err)
+	}
+	if result.InvisiblesRemoved == 0 {
+		t.Error("Pipeline Sanitize: expected InvisiblesRemoved > 0 for input with zero-width char")
+	}
+	if strings.TrimSpace(result.Summary) == "" {
+		t.Error("Pipeline Sanitize: expected non-empty summary")
+	}
+}
+
+// TestPipeline_SanitizePIICountsRedactions pins the split semantic: with
+// SanitizePII:true (and Sanitize off), PIIRedactions reflects the redacted PII
+// spans (== len(PIIFindings)) while InvisiblesRemoved stays 0.
+func TestPipeline_SanitizePIICountsRedactions(t *testing.T) {
+	text := "Contact alice@example.com for details. " + testArticle
+	result, err := Pipeline(text, PipelineOptions{
+		SanitizePII: true,
+		Summarize:   SummarizeOptions{Sentences: 2},
+	})
+	if err != nil {
+		t.Fatalf("Pipeline: unexpected error: %v", err)
+	}
+	if len(result.PIIFindings) == 0 {
+		t.Fatal("Pipeline SanitizePII: expected non-empty PIIFindings")
+	}
+	if result.PIIRedactions != len(result.PIIFindings) {
+		t.Errorf("Pipeline SanitizePII: PIIRedactions = %d, want %d (== len(PIIFindings))", result.PIIRedactions, len(result.PIIFindings))
+	}
+	if result.InvisiblesRemoved != 0 {
+		t.Errorf("Pipeline SanitizePII: InvisiblesRemoved counts Unicode strips only; want 0, got %d", result.InvisiblesRemoved)
 	}
 }
 

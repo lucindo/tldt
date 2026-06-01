@@ -43,7 +43,10 @@ func Install(opts Options) error {
 		return fmt.Errorf("resolving home dir: %w", err)
 	}
 
-	targets := resolveTargets(homeDir, opts)
+	targets, err := resolveTargets(homeDir, opts)
+	if err != nil {
+		return err
+	}
 	if len(targets) == 0 {
 		return fmt.Errorf("no install targets found")
 	}
@@ -66,36 +69,37 @@ func Install(opts Options) error {
 }
 
 // resolveTargets returns the list of coding assistant install targets.
-// Claude Code is always included. Optional apps are included if their
-// base directory exists. opts.SkillDir overrides all detection.
-func resolveTargets(homeDir string, opts Options) []installTarget {
-	// --skill-dir override: single custom target, no hook registration (D-17)
+// Claude Code is included on the default run, --target all, or --target claude;
+// a specific optional --target installs only that app. Optional apps are included
+// if their base directory exists (or is explicitly targeted). opts.SkillDir
+// overrides all detection. Returns an error if an explicitly targeted optional
+// app's base directory cannot be created.
+func resolveTargets(homeDir string, opts Options) ([]installTarget, error) {
+	// --skill-dir override: single custom target, no hook registration
 	if opts.SkillDir != "" {
 		return []installTarget{{
 			name:      "custom",
 			skillDest: filepath.Join(opts.SkillDir, "tldt", "SKILL.md"),
-		}}
+		}}, nil
 	}
 
-	// Claude Code: always install (D-16); hook registered only here
-	hookDest := filepath.Join(homeDir, ".claude", "hooks", "tldt-hook.sh")
-	targets := []installTarget{{
-		name:         "claude",
-		skillDest:    filepath.Join(homeDir, ".claude", "skills", "tldt", "SKILL.md"),
-		hookDest:     hookDest,
-		settingsPath: filepath.Join(homeDir, ".claude", "settings.json"),
-	}}
-
-	// Filter by --target if set
-	if opts.Target != "" && opts.Target != "all" {
-		if opts.Target == "claude" {
-			return targets
-		}
-		// Only the named target — claude base is still always included
-		// but skip optional if target doesn't match
+	// Claude Code is included on the default/all run or when explicitly targeted.
+	// It is the only target that registers the UserPromptSubmit hook. A specific
+	// optional target (e.g. --target opencode) must NOT drag in Claude.
+	var targets []installTarget
+	if opts.Target == "" || opts.Target == "all" || opts.Target == "claude" {
+		targets = append(targets, installTarget{
+			name:         "claude",
+			skillDest:    filepath.Join(homeDir, ".claude", "skills", "tldt", "SKILL.md"),
+			hookDest:     filepath.Join(homeDir, ".claude", "hooks", "tldt-hook.sh"),
+			settingsPath: filepath.Join(homeDir, ".claude", "settings.json"),
+		})
+	}
+	if opts.Target == "claude" {
+		return targets, nil
 	}
 
-	// Optional apps: detect by base directory existence (D-18)
+	// Optional apps: detect by base directory existence
 	optional := []struct {
 		name      string
 		detectDir string
@@ -125,11 +129,14 @@ func resolveTargets(homeDir string, opts Options) []installTarget {
 		_, err := os.Stat(o.detectDir)
 		dirExists := err == nil
 		// Auto-create directory when explicitly targeted (e.g., --target opencode)
-		// This enables seamless first-time installation for OpenCode, Cursor, Agents
+		// This enables seamless first-time installation for OpenCode, Cursor, Agents.
+		// A failure here on an explicit target is fatal — silently dropping it would
+		// report a false success.
 		if opts.Target == o.name && !dirExists {
-			if err := os.MkdirAll(o.detectDir, 0755); err == nil {
-				dirExists = true
+			if err := os.MkdirAll(o.detectDir, 0755); err != nil {
+				return nil, fmt.Errorf("creating base directory %q for target %q: %w", o.detectDir, o.name, err)
 			}
+			dirExists = true
 		}
 		if dirExists {
 			targets = append(targets, installTarget{
@@ -140,7 +147,7 @@ func resolveTargets(homeDir string, opts Options) []installTarget {
 		}
 	}
 
-	return targets
+	return targets, nil
 }
 
 // installSkillFile reads the embedded SKILL.md and writes it to destPath.
@@ -173,42 +180,61 @@ func installHookFile(destPath string) error {
 // with an empty object if missing), merges the tldt UserPromptSubmit hook entry,
 // and writes back using a temp-file-then-rename strategy for atomicity.
 // Idempotent: if hookCmd is already registered, returns nil without modifying the file.
-// hookCmd MUST be an absolute expanded path (not $HOME/...) per Pitfall 6.
+// hookCmd MUST be an absolute expanded path (not $HOME/...).
 func PatchSettingsJSON(settingsPath string, hookCmd string) error {
+	if !filepath.IsAbs(hookCmd) {
+		return fmt.Errorf("hookCmd must be an absolute path, got %q", hookCmd)
+	}
+
 	data, err := os.ReadFile(settingsPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("reading settings.json: %w", err)
 	}
 
-	var settings map[string]interface{}
+	var settings map[string]any
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &settings); err != nil {
 			return fmt.Errorf("settings.json is not valid JSON: %w", err)
 		}
 	} else {
-		settings = make(map[string]interface{})
+		settings = make(map[string]any)
 	}
 
-	// Navigate/create hooks.UserPromptSubmit array
-	hooks, _ := settings["hooks"].(map[string]interface{})
-	if hooks == nil {
-		hooks = make(map[string]interface{})
+	// Navigate/create hooks. A present-but-wrong-typed "hooks" key is a user
+	// config we must not silently overwrite — fail loudly instead.
+	var hooks map[string]any
+	if raw, present := settings["hooks"]; present {
+		h, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("settings.json %q: hooks must be a JSON object, got %T; refusing to overwrite", settingsPath, raw)
+		}
+		hooks = h
+	} else {
+		hooks = make(map[string]any)
 		settings["hooks"] = hooks
 	}
 
-	// Idempotency: check if hookCmd is already registered
-	existing, _ := hooks["UserPromptSubmit"].([]interface{})
+	// Idempotency: check if hookCmd is already registered. A present-but-wrong-typed
+	// UserPromptSubmit is likewise refused rather than clobbered.
+	var existing []any
+	if raw, present := hooks["UserPromptSubmit"]; present {
+		ups, ok := raw.([]any)
+		if !ok {
+			return fmt.Errorf("settings.json %q: hooks.UserPromptSubmit must be a JSON array, got %T; refusing to overwrite", settingsPath, raw)
+		}
+		existing = ups
+	}
 	for _, e := range existing {
-		m, ok := e.(map[string]interface{})
+		m, ok := e.(map[string]any)
 		if !ok {
 			continue
 		}
-		hs, ok := m["hooks"].([]interface{})
+		hs, ok := m["hooks"].([]any)
 		if !ok {
 			continue
 		}
 		for _, h := range hs {
-			hm, ok := h.(map[string]interface{})
+			hm, ok := h.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -219,9 +245,9 @@ func PatchSettingsJSON(settingsPath string, hookCmd string) error {
 	}
 
 	// Append new hook entry
-	newEntry := map[string]interface{}{
-		"hooks": []interface{}{
-			map[string]interface{}{
+	newEntry := map[string]any{
+		"hooks": []any{
+			map[string]any{
 				"type":    "command",
 				"command": hookCmd,
 				"timeout": 30,
@@ -236,7 +262,7 @@ func PatchSettingsJSON(settingsPath string, hookCmd string) error {
 		return fmt.Errorf("marshaling settings.json: %w", err)
 	}
 
-	// Atomic write: temp file then rename (Pitfall 4 mitigation)
+	// Atomic write: temp file then rename
 	tmpPath := settingsPath + ".tmp"
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
 		return fmt.Errorf("creating settings.json directory: %w", err)
@@ -249,4 +275,3 @@ func PatchSettingsJSON(settingsPath string, hookCmd string) error {
 	}
 	return nil
 }
-

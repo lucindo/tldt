@@ -35,13 +35,13 @@ func TestLoad_MalformedTOML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp file: %v", err)
 	}
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 
 	// Write malformed TOML — should cause a parse error
 	if _, err := f.WriteString("algorithm = bad toml [[["); err != nil {
 		t.Fatalf("writing temp file: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	cfg := Load(f.Name())
 	want := DefaultConfig()
@@ -55,13 +55,13 @@ func TestLoad_ValidConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp file: %v", err)
 	}
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 
 	content := "algorithm = \"textrank\"\nsentences = 7\n"
 	if _, err := f.WriteString(content); err != nil {
 		t.Fatalf("writing temp file: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	cfg := Load(f.Name())
 	if cfg.Algorithm != "textrank" {
@@ -84,13 +84,13 @@ func TestLoad_PartialConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp file: %v", err)
 	}
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 
 	// Only set algorithm — sentences must remain at default (5), not 0
 	if _, err := f.WriteString("algorithm = \"ensemble\"\n"); err != nil {
 		t.Fatalf("writing temp file: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	cfg := Load(f.Name())
 	if cfg.Algorithm != "ensemble" {
@@ -112,11 +112,11 @@ func TestLoad_ZeroSentences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp file: %v", err)
 	}
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 	if _, err := f.WriteString("sentences = 0\n"); err != nil {
 		t.Fatalf("writing temp file: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 	cfg := Load(f.Name())
 	if cfg.Sentences <= 0 {
 		t.Errorf("Load(sentences=0): Sentences = %d, want > 0", cfg.Sentences)
@@ -128,13 +128,13 @@ func TestLoad_UnknownKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp file: %v", err)
 	}
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 
 	content := "algorithm = \"lexrank\"\nunknown_key = \"ignored\"\n"
 	if _, err := f.WriteString(content); err != nil {
 		t.Fatalf("writing temp file: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	cfg := Load(f.Name())
 	if cfg.Algorithm != "lexrank" {
@@ -147,12 +147,12 @@ func TestLoad_LevelField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp file: %v", err)
 	}
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 
 	if _, err := f.WriteString("level = \"aggressive\"\n"); err != nil {
 		t.Fatalf("writing temp file: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	cfg := Load(f.Name())
 	if cfg.Level != "aggressive" {
@@ -212,9 +212,9 @@ func TestHookConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp file: %v", err)
 	}
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 	_, _ = f.WriteString("[hook]\nthreshold = 1500\n")
-	f.Close()
+	_ = f.Close()
 
 	cfg := Load(f.Name())
 	if cfg.Hook.Threshold != 1500 {
@@ -226,9 +226,9 @@ func TestHookConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp file: %v", err)
 	}
-	t.Cleanup(func() { os.Remove(f2.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f2.Name()) })
 	_, _ = f2.WriteString("[hook]\nthreshold = 0\n")
-	f2.Close()
+	_ = f2.Close()
 
 	cfg2 := Load(f2.Name())
 	if cfg2.Hook.Threshold != 2000 {
@@ -240,9 +240,9 @@ func TestHookConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating temp file: %v", err)
 	}
-	t.Cleanup(func() { os.Remove(f3.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f3.Name()) })
 	_, _ = f3.WriteString("[hook]\nthreshold = -5\n")
-	f3.Close()
+	_ = f3.Close()
 
 	cfg3 := Load(f3.Name())
 	if cfg3.Hook.Threshold != 2000 {

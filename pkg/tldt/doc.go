@@ -7,7 +7,7 @@
 //
 // Import: github.com/gleicon/tldt/pkg/tldt
 //
-// Quick Start
+// # Quick Start
 //
 // Basic summarization with defaults (LexRank, 5 sentences):
 //
@@ -17,14 +17,14 @@
 //	}
 //	fmt.Println(result.Summary)
 //
-// PII-Aware Pipeline
+// # PII-Aware Pipeline
 //
 // Run the full processing pipeline with PII redaction and injection detection:
 //
 //	result, err := tldt.Pipeline(untrustedText, tldt.PipelineOptions{
 //	    Sanitize:    true,  // strip invisible Unicode
 //	    SanitizePII: true,  // redact emails, API keys, JWTs
-//	    Detect:      tldt.DetectOptions{OutlierThreshold: 0.85},
+//	    Detect:      tldt.DetectOptions{OutlierThreshold: 0.99},
 //	    Summarize:   tldt.SummarizeOptions{Algorithm: "ensemble", Sentences: 3},
 //	})
 //	if err != nil {
@@ -33,7 +33,7 @@
 //
 //	// Access findings
 //	fmt.Printf("Summary: %s\n", result.Summary)
-//	fmt.Printf("Redactions: %d\n", result.Redactions)
+//	fmt.Printf("Redactions: %d invisible, %d PII\n", result.InvisiblesRemoved, result.PIIRedactions)
 //	fmt.Printf("Token reduction: %d%%\n", result.Reduction)
 //
 //	for _, finding := range result.PIIFindings {
@@ -41,11 +41,11 @@
 //	        finding.Pattern, finding.Line, finding.Excerpt)
 //	}
 //
-// URL Fetching
+// # URL Fetching
 //
 // Fetch and summarize a webpage:
 //
-//	result, err := tldt.Fetch("https://example.com/article", tldt.FetchOptions{
+//	result, err := tldt.Fetch(ctx, "https://example.com/article", tldt.FetchOptions{
 //	    Timeout: 30 * time.Second,
 //	})
 //	if err != nil {
@@ -59,7 +59,7 @@
 //	    Sentences: 3,
 //	})
 //
-// Individual Operations
+// # Individual Operations
 //
 // Each stage can be used independently:
 //
@@ -85,20 +85,24 @@
 //	redacted, findings := tldt.SanitizePII(text)
 //	fmt.Printf("Redacted %d findings\n", len(findings))
 //
-// Algorithm Selection
+// # Algorithm Selection
 //
 // Four algorithms are available:
+//
 //   - "lexrank": TF-IDF cosine similarity + eigenvector centrality (default)
+//
 //   - "textrank": Word overlap + PageRank damping
+//
 //   - "graph": Bag-of-words baseline (didasy/tldr library)
+//
 //   - "ensemble": Average of LexRank and TextRank scores
 //
-//	result, _ := tldt.Summarize(text, tldt.SummarizeOptions{
-//	    Algorithm: "ensemble",
-//	    Sentences: 7,
-//	})
+//     result, _ := tldt.Summarize(text, tldt.SummarizeOptions{
+//     Algorithm: "ensemble",
+//     Sentences: 7,
+//     })
 //
-// Error Handling
+// # Error Handling
 //
 // All errors are wrapped with context. Use errors.Is for sentinel errors:
 //
@@ -109,9 +113,8 @@
 //	    // Too many redirects
 //	}
 //
-// Thread Safety
+// # Thread Safety
 //
 // All functions are safe for concurrent use. There is no shared state.
 // Each call operates on its own data.
-//
 package tldt

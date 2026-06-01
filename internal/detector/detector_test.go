@@ -3,6 +3,7 @@ package detector
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // --- DetectPatterns tests ---
@@ -225,10 +226,10 @@ func TestDetectEncoding_NormalTextNoFindings(t *testing.T) {
 func TestDetectEncoding_CtrlCharDensity(t *testing.T) {
 	// Build string with >1% control chars
 	var b strings.Builder
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		b.WriteRune('a')
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		b.WriteRune('\x01') // SOH — not tab/newline/CR
 	}
 	input := b.String()
@@ -286,7 +287,7 @@ func TestDetectOutliers_OffTopicInjection(t *testing.T) {
 	matrix := buildUniformMatrix(4, 0.80)
 	// Override row/col 3 to have near-zero similarity (outlier_score > 0.99 threshold)
 	// With similarity 0.005, meanSim=0.005, outlier_score=0.995 > 0.99
-	for j := 0; j < 4; j++ {
+	for j := range 4 {
 		if j != 3 {
 			matrix[3][j] = 0.005
 			matrix[j][3] = 0.005
@@ -336,7 +337,7 @@ func TestDetectOutliers_CustomThreshold(t *testing.T) {
 	sentences := []string{"A", "B", "C", "marginal"}
 	matrix := buildUniformMatrix(4, 0.80)
 	// Sentence 3 has sim 0.25 → outlier_score = 0.75
-	for j := 0; j < 4; j++ {
+	for j := range 4 {
 		if j != 3 {
 			matrix[3][j] = 0.25
 			matrix[j][3] = 0.25
@@ -354,10 +355,34 @@ func TestDetectOutliers_CustomThreshold(t *testing.T) {
 	}
 }
 
+func TestDetectOutliers_ThresholdBoundaryExclusive(t *testing.T) {
+	// Sentence 2's similarity to the other two is exactly 0.5, so its
+	// outlier_score is exactly 0.5 (1 - mean(0.5, 0.5)). 0.5 is exactly
+	// representable, so the comparison against a 0.5 threshold is bit-exact.
+	// The threshold is exclusive (strict >), so score == threshold must NOT flag;
+	// a regression to >= would wrongly flag it here.
+	sentences := []string{"A", "B", "outlier"}
+	matrix := buildUniformMatrix(3, 0.90)
+	for j := range 3 {
+		if j != 2 {
+			matrix[2][j] = 0.5
+			matrix[j][2] = 0.5
+		}
+	}
+	// score == threshold (0.5): not flagged.
+	if findings := DetectOutliers(sentences, matrix, 0.5); len(findings) != 0 {
+		t.Errorf("DetectOutliers(threshold=0.5): score==threshold must not flag (exclusive), got %d findings", len(findings))
+	}
+	// score just above threshold (0.49): flagged.
+	if findings := DetectOutliers(sentences, matrix, 0.49); len(findings) != 1 {
+		t.Errorf("DetectOutliers(threshold=0.49): want 1 finding for score 0.5, got %d", len(findings))
+	}
+}
+
 func TestDetectOutliers_ScoreIsOutlierScore(t *testing.T) {
 	sentences := []string{"A", "B", "outlier"}
 	matrix := buildUniformMatrix(3, 0.80)
-	for j := 0; j < 3; j++ {
+	for j := range 3 {
 		if j != 2 {
 			matrix[2][j] = 0.01
 			matrix[j][2] = 0.01
@@ -635,6 +660,172 @@ func TestDetectPII_CreditCard(t *testing.T) {
 	}
 }
 
+func TestDetectPII_ModernSecrets(t *testing.T) {
+	positive := []struct {
+		input   string
+		pattern string
+	}{
+		{"key: sk-proj-abc_def-1234567890ABCDEFghij", "api-key"},
+		{"token ghp_abcdefghijklmnopqrstuvwxyz0123456789", "github-token"},
+		{"github_pat_11ABCDE0abcdefghij_klmnopqrstuvwxyz0123456789ABCDEFGH", "github-token"},
+		{"SSN: 123-45-6789", "ssn"},
+	}
+	for _, tc := range positive {
+		found := false
+		for _, f := range DetectPII(tc.input) {
+			if f.Pattern == tc.pattern {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("DetectPII(%q): want %s finding, got none", tc.input, tc.pattern)
+		}
+	}
+}
+
+func TestDetectPII_SlackToken(t *testing.T) {
+	// Built from parts so the literal token never appears contiguously in source
+	// (keeps secret scanners from flagging an obviously-fake test fixture).
+	slackToken := "xox" + "b-2222222222-3333333333333-aBcDeFgHiJkLmNoPqRsTuVwX"
+	text := "slack " + slackToken + " end"
+	found := false
+	for _, f := range DetectPII(text) {
+		if f.Pattern == "slack-token" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("DetectPII: want slack-token finding, got none")
+	}
+	redacted, _ := SanitizePII(text)
+	if strings.Contains(redacted, slackToken) {
+		t.Errorf("SanitizePII: Slack token still present: %q", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED:slack-token]") {
+		t.Errorf("SanitizePII: expected [REDACTED:slack-token], got %q", redacted)
+	}
+}
+
+func TestSanitizePII_RedactsHighEntropyBase64(t *testing.T) {
+	// A prefix-less high-entropy blob matches no fixed pattern; --sanitize-pii
+	// must still redact it via the shared entropy path. (Synthetic random-looking
+	// base64, not a real secret shape, so scanners leave it alone.)
+	secret := "k7Jx2Qp9Lw4Vn8Rb1Tz6Yh0Dg5Sf3Kc8Mq2Ej7Pa9Wd"
+	text := "blob: " + secret + " done"
+	// Sanity: the encoding detector flags it (shared highEntropyBase64 source).
+	flagged := false
+	for _, f := range DetectEncoding(text) {
+		if f.Pattern == "base64" {
+			flagged = true
+		}
+	}
+	if !flagged {
+		t.Fatalf("DetectEncoding: expected base64 finding for %q (entropy gate)", secret)
+	}
+	redacted, findings := SanitizePII(text)
+	if strings.Contains(redacted, secret) {
+		t.Errorf("SanitizePII: high-entropy secret still present: %q", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED:secret]") {
+		t.Errorf("SanitizePII: expected [REDACTED:secret], got %q", redacted)
+	}
+	gotSecret := false
+	for _, f := range findings {
+		if f.Pattern == "secret" {
+			gotSecret = true
+		}
+	}
+	if !gotSecret {
+		t.Errorf("SanitizePII: expected a 'secret' finding, got %v", findings)
+	}
+}
+
+// TestSanitizePII_RedactsPaddedHighEntropyToken guards the B1 fix: a high-entropy
+// body captured with a trailing '=' must still be redacted. The old re-pad logic
+// appended padding to the already-'='-terminated token, producing an invalid
+// string that failed to decode and silently skipped the secret.
+func TestSanitizePII_RedactsPaddedHighEntropyToken(t *testing.T) {
+	body := "k7Jx2Qp9Lw4Vn8Rb1Tz6Yh0D" // 24 base64 chars → decodes with no padding
+	text := "key: " + body + "= rest"  // stray '=' is captured by the base64 regex
+	redacted, _ := SanitizePII(text)
+	if strings.Contains(redacted, body) {
+		t.Errorf("SanitizePII: padded high-entropy token not redacted: %q", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED:secret]") {
+		t.Errorf("SanitizePII: expected [REDACTED:secret], got %q", redacted)
+	}
+}
+
+func TestDetectPII_PrivateKeyBlock(t *testing.T) {
+	pem := "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAabcdefSAMPLEFAKEKEYBODY\n-----END RSA PRIVATE KEY-----"
+	text := "config:\n" + pem + "\ndone"
+	redacted, findings := SanitizePII(text)
+	found := false
+	for _, f := range findings {
+		if f.Pattern == "private-key" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("DetectPII: want private-key finding for PEM block, got %v", findings)
+	}
+	// The multi-line key body must be redacted, not just the header.
+	if strings.Contains(redacted, "SAMPLEFAKEKEYBODY") {
+		t.Errorf("SanitizePII: PEM key body still present in output: %q", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED:private-key]") {
+		t.Errorf("SanitizePII: expected [REDACTED:private-key], got: %q", redacted)
+	}
+}
+
+func TestDetectPII_CreditCardLuhn(t *testing.T) {
+	// Luhn-invalid 16-digit run must not be flagged or redacted.
+	bad := "id 4111111111111112 here"
+	for _, f := range DetectPII(bad) {
+		if f.Pattern == "credit-card" {
+			t.Errorf("DetectPII(%q): unexpected credit-card finding for Luhn-invalid number", bad)
+		}
+	}
+	redacted, _ := SanitizePII(bad)
+	if !strings.Contains(redacted, "4111111111111112") {
+		t.Errorf("SanitizePII: Luhn-invalid number should remain, got: %q", redacted)
+	}
+}
+
+func TestTruncateExcerpt_RuneSafe(t *testing.T) {
+	// 90 multibyte runes (each 3 bytes) — a byte-slice cut at 80 would split a
+	// rune and yield invalid UTF-8. The rune-aware helper must not.
+	s := strings.Repeat("界", 90)
+	got := truncateExcerpt(s, 80, "…")
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateExcerpt produced invalid UTF-8: %q", got)
+	}
+	if r := utf8.RuneCountInString(strings.TrimSuffix(got, "…")); r != 80 {
+		t.Errorf("truncateExcerpt: want 80 runes before ellipsis, got %d", r)
+	}
+	// ASCII shorter than the limit is returned unchanged (no ellipsis).
+	if got := truncateExcerpt("hello", 80, "…"); got != "hello" {
+		t.Errorf("truncateExcerpt(short) = %q, want %q", got, "hello")
+	}
+}
+
+func TestSanitizePII_OverlapConsistent(t *testing.T) {
+	// "Bearer sk-…" matches both the Bearer and the sk- api-key patterns, which
+	// overlap. Span-based redaction must collapse them into one redaction, and the
+	// returned findings must match the redactions (no double-count, no leftover).
+	input := "auth: Bearer sk-abcdefghij1234567890"
+	redacted, findings := SanitizePII(input)
+	if strings.Contains(redacted, "sk-abcdefghij") {
+		t.Errorf("SanitizePII: secret still present after redaction: %q", redacted)
+	}
+	if n := strings.Count(redacted, "[REDACTED:"); n != len(findings) {
+		t.Errorf("SanitizePII: %d redactions but %d findings — must match", n, len(findings))
+	}
+	if n := strings.Count(redacted, "[REDACTED:"); n != 1 {
+		t.Errorf("SanitizePII: want 1 merged redaction for overlapping match, got %d: %q", n, redacted)
+	}
+}
+
 func TestSanitizePII_Redaction(t *testing.T) {
 	input := "Contact alice@example.com for help"
 	redacted, findings := SanitizePII(input)
@@ -671,6 +862,56 @@ func TestSanitizePII_MultipleTypes(t *testing.T) {
 	}
 	if len(findings) < 2 {
 		t.Errorf("SanitizePII: want >= 2 findings, got %d", len(findings))
+	}
+}
+
+// validJWTForSanitize is a structurally valid three-segment JWT used to exercise
+// SanitizePII alongside other adjacent PII types.
+const validJWTForSanitize = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+
+// TestSanitizePII_OverlappingAdjacent feeds several PII types packed together
+// (email, sk- API key, JWT, 16-digit card) and asserts the redaction is complete
+// and well-formed: no original PII substring survives, and no [REDACTED: token is
+// nested inside another redaction token.
+func TestSanitizePII_OverlappingAdjacent(t *testing.T) {
+	const (
+		email  = "alice@example.com"
+		apiKey = "sk-abc12345678901234567890"
+		card   = "4111111111111111"
+	)
+	input := email + " " + apiKey + " " + validJWTForSanitize + " " + card
+
+	redacted, findings := SanitizePII(input)
+	if len(findings) == 0 {
+		t.Fatal("SanitizePII: expected findings for packed PII input, got none")
+	}
+
+	// (a) None of the original PII substrings survive.
+	for _, secret := range []string{email, apiKey, validJWTForSanitize, card} {
+		if strings.Contains(redacted, secret) {
+			t.Errorf("SanitizePII: original PII %q survived in output: %q", secret, redacted)
+		}
+	}
+
+	// (b) No [REDACTED: token is nested inside another. Walk each redaction token
+	// from its opening "[REDACTED:" to the next "]" and ensure that span contains
+	// no further "[REDACTED:" marker.
+	const open = "[REDACTED:"
+	rest := redacted
+	for {
+		i := strings.Index(rest, open)
+		if i < 0 {
+			break
+		}
+		body := rest[i+len(open):]
+		end := strings.Index(body, "]")
+		if end < 0 {
+			t.Fatalf("SanitizePII: unterminated redaction token in output: %q", redacted)
+		}
+		if strings.Contains(body[:end], open) {
+			t.Errorf("SanitizePII: nested redaction token in output: %q", redacted)
+		}
+		rest = body[end+1:]
 	}
 }
 
